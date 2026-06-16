@@ -45,11 +45,13 @@ export async function writeSynopsis(
     "Escribe una sinopsis comercial atractiva, 2-4 frases, sin spoilers del final. " +
     "Usa EXACTAMENTE los nombres de personaje que se te dan; no inventes nombres nuevos. " +
     "Evita fórmulas y aperturas calcadas: NO empieces con la típica 'joven inocente capturada'. " +
-    "Haz que esta sinopsis se sienta distinta y específica.";
+    "Haz que esta sinopsis se sienta distinta y específica." +
+    (bible.atmosphere ? ` Respeta la atmósfera del género: ${bible.atmosphere}` : "");
   const axes =
     `\nPunto de partida: ${bible.setup || ""}\n` +
     `Dinámica de poder: ${bible.powerDynamic || ""}\n` +
-    `La heroína es: ${bible.heroineAngle || ""}`;
+    `La heroína es: ${bible.heroineAngle || ""}\n` +
+    `Motor del conflicto (gancho central, úsalo): ${bible.engine || ""}`;
   const user =
     `Premisa: ${bible.premise}\nAmbientación: ${bible.setting}\nTono: ${bible.tone}\n` +
     `Personajes (usa estos nombres exactos): ${cast}\n` +
@@ -97,6 +99,19 @@ export async function writeChapter(args: {
   };
   const musts = (bible.mustHaves || []).filter(Boolean);
 
+  // Motor del conflicto: presente en todo el libro. El secreto se revela cerca
+  // del punto medio; la complicación entra en el tercio final. Así el giro cae
+  // donde debe y cada libro avanza distinto.
+  const phase = index / total;
+  const plotDirectives =
+    (bible.engine ? `MOTOR DEL CONFLICTO (mantenlo vivo en este capítulo): ${bible.engine}.\n` : "") +
+    (bible.secret && phase >= 0.45 && phase <= 0.65
+      ? `GIRO CLAVE: en torno a este punto del libro, deja caer o revela el secreto que reconfigura la trama: ${bible.secret}.\n`
+      : "") +
+    (bible.complication && phase >= 0.7
+      ? `COMPLICACIÓN (tercio final): introduce o intensifica esta vuelta de tuerca: ${bible.complication}.\n`
+      : "");
+
   // Solo el capítulo 1: arranca distinto en cada libro según los ejes de variación.
   const opening = index === 1
     ? `APERTURA DEL LIBRO (capítulo 1): ${bible.openingTone || "engancha desde la primera línea"}. ` +
@@ -115,6 +130,7 @@ export async function writeChapter(args: {
     "3) NO vuelvas a presentar a personajes ya presentados. " +
     "4) Avanza ÚNICAMENTE el objetivo de ESTE capítulo. " +
     "No incluyas encabezados, títulos ni notas: solo la prosa del capítulo. " +
+    (bible.atmosphere ? `ATMÓSFERA DEL GÉNERO (cúmplela en cada escena): ${bible.atmosphere} ` : "") +
     heatDirective(bible.heat);
 
   const user =
@@ -127,6 +143,7 @@ export async function writeChapter(args: {
     `ARCO COMPLETO (▶ = capítulo a escribir):\n${arcList}\n\n` +
     `LO OCURRIDO HASTA AHORA:\n${soFar || "(este es el comienzo del libro)"}\n\n` +
     (opening ? `${opening}\n\n` : "") +
+    (plotDirectives ? `${plotDirectives}\n` : "") +
     `Escribe el CAPÍTULO ${index} de ${total}. Objetivo exclusivo de este capítulo: ${beat}. ` +
     `Empieza justo donde terminó el capítulo anterior y avanza la trama. ` +
     `Cierra el capítulo con una frase completa; no lo dejes a medias.`;

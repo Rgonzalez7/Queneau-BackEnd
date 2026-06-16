@@ -32,9 +32,9 @@ interface OpeningOpts {
 }
 
 /* Construye la biblia con modelo + safety; traduce SafetyError -> 422. */
-async function bibleFor(profile: Profile, format: FormatKey) {
+async function bibleFor(profile: Profile, format: FormatKey, seed?: string) {
   try {
-    return await buildBible(profile, { format });
+    return await buildBible(profile, { format, seed });
   } catch (e) {
     if (e instanceof SafetyError) throw new HttpError(422, e.message);
     throw e;
@@ -78,9 +78,13 @@ export async function createOpening(
     ? db.stories.find((s) => s.id === opts.predecessorId) || null
     : null;
 
+  // id único del libro. También es la SEMILLA de la biblia: así dos libros del
+  // MISMO perfil obtienen nombres y trama distintos (la variedad depende del seed).
+  const storyId = uid();
+
   // Secuela: hereda la biblia congelada del predecesor (mismo mundo/personajes).
-  // Si no, se construye con el modelo (+ safety).
-  const bible = predecessor?.bibleSnapshot ?? (await bibleFor(profile, format));
+  // Si no, se construye con el modelo (+ safety), sembrada con el id del libro.
+  const bible = predecessor?.bibleSnapshot ?? (await bibleFor(profile, format, storyId));
 
   // Apertura: solo sinopsis + capítulo 1 (el gancho gratis).
   const synopsis = await writeSynopsis(bible, format, predecessor);
@@ -90,7 +94,7 @@ export async function createOpening(
   const origin = paidExtra ? "pagada_extra" : "gratis";
 
   const story: Story = {
-    id: uid(),
+    id: storyId,
     profileSnapshot: JSON.parse(JSON.stringify(profile)), // FOTO CONGELADA
     profileName: profile.name,
     predecessorId: predecessor ? predecessor.id : null,
@@ -122,7 +126,7 @@ export async function purchaseOpening(db: DB, id: string): Promise<Story> {
 
   const total = FORMATS[s.format].chapters;
   // Biblia congelada; si es una historia antigua sin biblia, se construye una vez.
-  s.bibleSnapshot = s.bibleSnapshot ?? (await bibleFor(s.profileSnapshot, s.format));
+  s.bibleSnapshot = s.bibleSnapshot ?? (await bibleFor(s.profileSnapshot, s.format, s.id));
 
   s.paid = true; // R3: comprada
   s.expiresAt = null; // lo pagado NUNCA caduca
@@ -247,7 +251,7 @@ export function setFinished(db: DB, id: string, finished: boolean): Story {
 export function publicState(db: DB): PublicState {
   const q = quotaState(db);
   return {
-    brand: "Queneau",
+    brand: "Quenu",
     quota: q,
     formats: FORMATS,
     profiles: db.profiles,

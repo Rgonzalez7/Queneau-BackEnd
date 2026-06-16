@@ -39,20 +39,77 @@ function chaptersFor(format?: FormatKey, explicit?: number): number {
   return (format && FORMATS[format]?.chapters) || 24;
 }
 
-const ARC_STAGES = [
-  "Presentación del mundo y la protagonista",
-  "Colisión: se cruzan los caminos",
-  "Atracción y tensión crecientes",
-  "Juego de poder y primera complicación",
-  "Intimidad y vulnerabilidad",
-  "Giro oscuro: traición o crisis",
-  "Clímax y resolución",
+/* ------------------------------ ARCOS -------------------------------
+   Varias PLANTILLAS de arco (no una sola). Cada libro elige una por seed,
+   así dos libros del mismo género no comparten el mismo esqueleto narrativo. */
+const ARC_TEMPLATES: { name: string; stages: string[] }[] = [
+  {
+    name: "ascenso clásico",
+    stages: [
+      "Presentación del mundo y la protagonista",
+      "Colisión: se cruzan los caminos",
+      "Atracción y tensión crecientes",
+      "Juego de poder y primera complicación",
+      "Intimidad y vulnerabilidad",
+      "Giro oscuro: traición o crisis",
+      "Clímax y resolución",
+    ],
+  },
+  {
+    name: "in media res",
+    stages: [
+      "Arranque en plena crisis o peligro",
+      "Tregua incómoda y primeras chispas",
+      "El secreto que lo cambia todo asoma",
+      "Alianza forzada bajo presión",
+      "Punto de no retorno: cae una máscara",
+      "Ruptura y consecuencias",
+      "Confrontación final y nuevo equilibrio",
+    ],
+  },
+  {
+    name: "gato y ratón",
+    stages: [
+      "Dos agendas opuestas en marcha",
+      "Primer encontronazo: quién domina a quién",
+      "Maniobras, mentiras y deseo contenido",
+      "Una trampa se vuelve en contra",
+      "Rendición mutua que ninguno planeaba",
+      "Doble traición y el costo de confiar",
+      "Última jugada y desenlace",
+    ],
+  },
+  {
+    name: "lento incendio",
+    stages: [
+      "Mundo cotidiano y grieta inicial",
+      "Cercanía obligada, distancia emocional",
+      "Confianza frágil que se construye",
+      "Deseo que desborda las reglas",
+      "La amenaza externa aprieta",
+      "Sacrificio y herida abierta",
+      "Reconstrucción y elección final",
+    ],
+  },
+  {
+    name: "espiral descendente",
+    stages: [
+      "Aparente calma con una sombra debajo",
+      "El encuentro que rompe la rutina",
+      "Obsesión y líneas que se cruzan",
+      "Lo prohibido se consuma",
+      "Todo se desmorona: verdad brutal",
+      "Punto más oscuro, sin salida aparente",
+      "Catarsis y resolución ganada a pulso",
+    ],
+  },
 ];
-function buildArc(n: number) {
+function buildArc(n: number, tplIndex = 0) {
+  const stages = ARC_TEMPLATES[tplIndex % ARC_TEMPLATES.length].stages;
   const out: { chapter: number; beat: string }[] = [];
   for (let i = 1; i <= n; i++) {
-    const stage = Math.min(ARC_STAGES.length - 1, Math.floor(((i - 1) / n) * ARC_STAGES.length));
-    out.push({ chapter: i, beat: ARC_STAGES[stage] });
+    const stage = Math.min(stages.length - 1, Math.floor(((i - 1) / n) * stages.length));
+    out.push({ chapter: i, beat: stages[stage] });
   }
   return out;
 }
@@ -161,6 +218,41 @@ const OPENING = [
   "empieza con una amenaza concreta sobre la mesa",
   "abre con ella tomando una decisión arriesgada por voluntad propia",
 ];
+/* MOTOR central del conflicto: lo que de verdad mueve la trama (más allá del setup). */
+const ENGINE = [
+  "una guerra de territorios que amenaza con estallar",
+  "una traición interna que hay que destapar antes de que los mate",
+  "una deuda imposible con un plazo que corre",
+  "un secreto del pasado de él que sale a la luz",
+  "una venganza meticulosa que ella ejecuta paso a paso",
+  "un chantaje que los obliga a fingir lo que no son",
+  "una herencia o sucesión que todos quieren arrebatar",
+  "un enemigo común más peligroso que ellos dos juntos",
+  "una investigación que la acerca demasiado a la verdad",
+  "un trato con un tercero que ninguno puede romper sin perderlo todo",
+  "una huida constante de algo que siempre los alcanza",
+  "una lealtad dividida que tarde o temprano debe romperse",
+];
+/* SECRETO que reconfigura la historia a mitad de camino. */
+const SECRET = [
+  "él no es quien dijo ser desde el principio",
+  "ella oculta una identidad que lo cambia todo",
+  "alguien de confianza es en realidad el verdadero enemigo",
+  "el origen de la deuda/venganza fue una mentira",
+  "hay un vínculo del pasado que los une sin que lo sepan",
+  "lo que ella busca proteger es justo lo que él quiere destruir",
+  "una muerte que se creía cierta no lo fue",
+  "el trato que los unió fue orquestado por un tercero",
+];
+/* COMPLICACIÓN/giro extra que evita el final predecible. */
+const COMPLICATION = [
+  "un tercero en discordia mueve sus propias fichas",
+  "una decisión imposible que enfrenta amor y deber",
+  "un sacrificio que cambia las reglas del juego",
+  "una doble agenda que estalla en el peor momento",
+  "una pérdida que obliga a redefinir qué están dispuestos a perder",
+  "un cambio de bando inesperado",
+];
 function variationFor(seed: number) {
   const rnd = mulberry32((seed ^ 0x9e3779b9) >>> 0); // flujo independiente del de nombres
   return {
@@ -168,8 +260,30 @@ function variationFor(seed: number) {
     power: pickFrom(POWER, rnd),
     heroine: pickFrom(HEROINE, rnd),
     opening: pickFrom(OPENING, rnd),
+    engine: pickFrom(ENGINE, rnd),
+    secret: pickFrom(SECRET, rnd),
+    complication: pickFrom(COMPLICATION, rnd),
+    arcTpl: Math.floor(rnd() * ARC_TEMPLATES.length),
   };
 }
+
+/* ------- ATMÓSFERA por género: que un Terror dé miedo y un Militar sepa a deber ------- */
+const GENRE_ATMOSPHERE: { test: RegExp; mood: string }[] = [
+  { test: /terror|horror|miedo/i, mood: "verdadero terror y suspenso: presagios, amenaza constante, escenas que dan miedo de verdad, atmósfera opresiva. El romance crece DENTRO del horror, no lo reemplaza." },
+  { test: /suspens|thriller|intriga/i, mood: "tensión de thriller: pistas, giros, peligro creciente y la sensación de que nada es lo que parece." },
+  { test: /military|militar|soldad|guerra|navy|army/i, mood: "deber, jerarquía y vínculo de hermandad; secuelas del combate, misiones de alto riesgo, lealtad y honor bajo presión." },
+  { test: /mafia|bratva|cartel|crimen|criminal/i, mood: "poder, violencia controlada, códigos de honor del bajo mundo y traiciones que cuestan sangre." },
+  { test: /paranormal|vampir|licántropo|lobo|sobrenatural|fae|hada|demon|ángel/i, mood: "lo sobrenatural como amenaza y atracción: reglas del mundo oculto, peligro no humano, deseo prohibido." },
+  { test: /fantas|romantas|reino|corte/i, mood: "mundo de fantasía con política, magia y peligro; lo épico se entrelaza con lo íntimo." },
+  { test: /histórico|historico|época|regencia|victoria/i, mood: "ambiente de época creíble: normas sociales rígidas, decoro y deseo reprimido bajo la superficie." },
+  { test: /deport|sport/i, mood: "competencia, presión pública, disciplina física y química que se enciende fuera de la cancha." },
+  { test: /billion|billon|millon|ceo|oficina|jefe/i, mood: "lujo, poder corporativo, juegos de control y vulnerabilidad escondida tras el éxito." },
+];
+function atmosphereFor(profile: Profile): string {
+  const blob = [profile.genre, ...(profile.settings || []), ...(profile.tropes || [])].join(" ");
+  return GENRE_ATMOSPHERE.find((g) => g.test.test(blob))?.mood ?? "";
+}
+
 function firstName(full: string): string {
   return (full || "").split(" ")[0] || full;
 }
@@ -210,11 +324,13 @@ export function deterministicBible(profile: Profile, format?: FormatKey, seedStr
 
   const genre = profile.genre || "romance";
   const v = variationFor(seed);
+  const atmosphere = atmosphereFor(profile);
   const her = firstName(characters[0].name);
   const him = firstName(characters[1].name);
   const premise =
     `${her} y ${him} quedan unidos por ${v.setup}. ` +
-    `Ella es ${v.heroine}; ${v.power}.`;
+    `Ella es ${v.heroine}; ${v.power}. ` +
+    `El conflicto se mueve por ${v.engine}, y a mitad de camino ${v.secret}.`;
   const setting = (profile.settings && profile.settings[0])
     ? `Ambientada en ${profile.settings[0]}, un mundo ${tone} donde el poder marca cada decisión.`
     : `Un mundo ${tone} donde el poder y la atracción marcan cada decisión.`;
@@ -234,7 +350,12 @@ export function deterministicBible(profile: Profile, format?: FormatKey, seedStr
     powerDynamic: v.power,
     heroineAngle: v.heroine,
     openingTone: v.opening,
-    arc: buildArc(n),
+    engine: v.engine,
+    secret: v.secret,
+    complication: v.complication,
+    atmosphere: atmosphere || undefined,
+    arcTemplate: ARC_TEMPLATES[v.arcTpl].name,
+    arc: buildArc(n, v.arcTpl),
   };
 }
 
@@ -289,6 +410,9 @@ function buildPrompt(profile: Profile, n: number, base: StoryBible) {
   const darkLine = profile.darkness
     ? `Nivel de oscuridad: ${darkLabel[profile.darkness] || profile.darkness} — ajusta la intensidad a este nivel.\n`
     : "";
+  const atmoLine = base.atmosphere
+    ? `ATMÓSFERA OBLIGATORIA del género (${profile.genre}): ${base.atmosphere}\n`
+    : "";
   const byRole: Record<string, string> = {};
   base.characters.forEach((c) => { byRole[c.role] = c.name; });
 
@@ -297,6 +421,7 @@ function buildPrompt(profile: Profile, n: number, base: StoryBible) {
     "Todos los personajes son adultos (18+). No describas a menores en ningún contexto. " +
     "Crea una premisa ORIGINAL y específica para ESTA historia; evita fórmulas y aperturas calcadas " +
     "(p. ej. NO empieces siempre con 'una joven inocente es capturada'). " +
+    "Respeta la ATMÓSFERA del género: si es terror, da miedo; si es militar, sabe a deber y combate. " +
     "Devuelve SOLO un objeto JSON válido y completo, sin texto adicional ni markdown. " +
     "Cierra todas las llaves y corchetes.";
   const user =
@@ -305,6 +430,7 @@ function buildPrompt(profile: Profile, n: number, base: StoryBible) {
     `Calor: ${profile.heat_level || "picante"}\n` +
     archLine +
     darkLine +
+    atmoLine +
     `Tropos: ${tropes}\n` +
     `Imprescindibles: ${musts}\n` +
     `Evitar: ${avoid}\n` +
@@ -318,7 +444,11 @@ function buildPrompt(profile: Profile, n: number, base: StoryBible) {
     `- Cómo quedan unidos: ${base.setup}\n` +
     `- Dinámica de poder: ${base.powerDynamic}\n` +
     `- La heroína es: ${base.heroineAngle} (NO la escribas como inocente pasiva salvo que de verdad encaje)\n` +
-    `- Apertura: ${base.openingTone}\n\n` +
+    `- Motor del conflicto: ${base.engine}\n` +
+    `- Secreto que reconfigura la trama: ${base.secret}\n` +
+    `- Complicación/giro extra: ${base.complication}\n` +
+    `- Apertura: ${base.openingTone}\n` +
+    `- Forma del arco: ${base.arcTemplate}\n\n` +
     `Devuelve JSON con esta forma exacta (beats: una frase concreta por capítulo, ${n} en total):\n` +
     `{"premise":"1-2 frases originales","setting":"1 frase","traits":{"protagonista":["rasgo","rasgo"],` +
     `"interes":["rasgo","rasgo"],"antagonista":["rasgo","rasgo"]},"beats":["...", "${n} en total"]}`;
