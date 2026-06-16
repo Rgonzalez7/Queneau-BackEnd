@@ -1,0 +1,86 @@
+/* ---------------------------------------------------------------------------
+   safety.test.ts — pruebas de la capa de seguridad. Sin red, sin framework.
+   Correr:  npx tsx src/lib/safety.test.ts   (o: tsx safety.test.ts)
+--------------------------------------------------------------------------- */
+import assert from "node:assert/strict";
+import {
+  assessProfile,
+  assessOutput,
+  enforceAdultCharacters,
+} from "./safety";
+
+let passed = 0;
+let failed = 0;
+function test(name: string, fn: () => void) {
+  try {
+    fn();
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } catch (e) {
+    failed++;
+    console.log(`  ✗ ${name}\n      ${(e as Error).message}`);
+  }
+}
+
+console.log("safety.ts");
+
+/* ---- perfil ---- */
+test("perfil adulto limpio pasa", () => {
+  const r = assessProfile({ genre: "dark romance", tone: "oscuro", tropes: ["enemies to lovers", "mafia"] });
+  assert.equal(r.ok, true);
+});
+
+test("perfil con indicio de menor + contexto sexual se bloquea", () => {
+  const r = assessProfile({ genre: "romance", notes: "protagonista adolescente en escena sexual" });
+  assert.equal(r.ok, false);
+});
+
+test("perfil que solo menciona 'colegio' sin contexto sexual pasa", () => {
+  const r = assessProfile({ genre: "romance", notes: "ambientado cerca de un colegio del pueblo" });
+  assert.equal(r.ok, true);
+});
+
+/* ---- personajes del bible ---- */
+test("todos los personajes 18+ pasa", () => {
+  const r = enforceAdultCharacters({
+    characters: [
+      { name: "Lía", age: 27 },
+      { name: "Dante", age: 34 },
+    ],
+  });
+  assert.equal(r.ok, true);
+});
+
+test("personaje de 17 se bloquea", () => {
+  const r = enforceAdultCharacters({ characters: [{ name: "X", age: 17 }] });
+  assert.equal(r.ok, false);
+});
+
+test("edad ausente/ambigua se bloquea", () => {
+  const r = enforceAdultCharacters({ characters: [{ name: "Y" }] });
+  assert.equal(r.ok, false);
+});
+
+/* ---- salida del modelo ---- */
+test("salida adulta limpia pasa", () => {
+  const r = assessOutput("Era una noche de deseo entre dos desconocidos que se buscaban en la oscuridad.");
+  assert.equal(r.ok, true);
+});
+
+test("salida con edad explícita <18 se bloquea", () => {
+  const r = assessOutput("Ella tenía 17 años cuando todo cambió esa noche.");
+  assert.equal(r.ok, false);
+});
+
+test("salida con término de menor + sexual se bloquea", () => {
+  const r = assessOutput("La adolescente sentía una excitación nueva.");
+  assert.equal(r.ok, false);
+});
+
+test("backstory no sexual que menciona la niñez pasa", () => {
+  const r = assessOutput("Recordó su niñez en el campo, los veranos largos y el río.");
+  assert.equal(r.ok, true);
+});
+
+console.log(`\n${passed} pasaron, ${failed} fallaron`);
+if (failed > 0) process.exit(1);
