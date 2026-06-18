@@ -195,6 +195,23 @@ app.post(
   })
 );
 
+// Borra un libro de forma permanente (cualquier estado: apertura, en lectura o
+// leído). Si la cuota de aperturas gratis se deriva de las historias activas,
+// borrar una apertura libera su cupo automáticamente al recomputar publicState.
+app.delete(
+  "/api/openings/:id",
+  handler(async (req, res) => {
+    const out = await withDB((db) => {
+      sweepExpired(db);
+      const i = db.stories.findIndex((s) => s.id === req.params.id);
+      if (i < 0) throw new HttpError(404, "Libro no encontrado");
+      db.stories.splice(i, 1);
+      return publicState(db);
+    });
+    res.json(out);
+  })
+);
+
 app.listen(PORT, () => {
   console.log(`Queneau backend en http://localhost:${PORT}`);
   // Retoma libros comprados que quedaron a medias por un reinicio.
