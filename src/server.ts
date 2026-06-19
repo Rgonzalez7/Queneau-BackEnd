@@ -79,9 +79,14 @@ app.post(
         tone: body.tone || [],
         pov: body.pov || "",
         pacing: body.pacing || "",
+        archetype: body.archetype || "",
+        darkness: body.darkness || "",
         must_haves: body.must_haves || [],
         avoid: body.avoid || [],
         settings: body.settings || [],
+        autopick: body.autopick || undefined,
+        scenes: body.scenes || [],
+        customScenes: body.customScenes || [],
         created: body.created || Date.now(),
       };
       const i = db.profiles.findIndex((p) => p.id === profile.id);

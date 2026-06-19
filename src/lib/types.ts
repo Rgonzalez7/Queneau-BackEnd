@@ -5,6 +5,17 @@ export type FormatKey = "corta" | "completa" | "saga";
 export type Origin = "gratis" | "pagada_extra";
 export type StoryStatus = "apertura" | "desbloqueada";
 
+export type ScenePosition = "auto" | "inicio" | "medio" | "final";
+export interface SceneSpec { type: string; count: number }
+export interface CustomScene { text: string; position: ScenePosition }
+export interface AutoPick {
+  intensity?: boolean;
+  tropes?: boolean;
+  toneStructure?: boolean;
+  details?: boolean;
+  scenes?: boolean;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -20,6 +31,9 @@ export interface Profile {
   must_haves: string[];
   avoid: string[];
   settings: string[];
+  autopick?: AutoPick;          // qué pasos decide Queneau (true) vs la lectora (false)
+  scenes?: SceneSpec[];         // escenas obligatorias por tipo + cantidad
+  customScenes?: CustomScene[]; // escenas libres descritas por la lectora
   created: number;
 }
 
@@ -54,6 +68,13 @@ export interface StoryBible {
   powerDynamic?: string; // quién tiene el poder
   heroineAngle?: string; // qué tipo de heroína (no siempre "inocente capturada")
   openingTone?: string;  // cómo arranca la historia
+  engine?: string;        // motor central del conflicto
+  secret?: string;        // secreto que reconfigura la trama a mitad de camino
+  complication?: string;  // giro extra del tercio final
+  atmosphere?: string;    // atmósfera obligatoria del género
+  arcTemplate?: string;   // nombre de la plantilla de arco elegida
+  // escenas pedidas por la lectora, repartidas por capítulo (código decide DÓNDE)
+  scenePlan?: { chapter: number; directive: string }[];
   arc: { chapter: number; beat: string }[];
 }
 
@@ -71,6 +92,7 @@ export interface Story {
   generating?: boolean;   // true mientras el worker produce los capítulos restantes
   coverImage?: string | null; // ruta de la portada IA (/covers/<id>.png); null/undefined => usa vector
   coverFamily?: number; // índice de la familia de motivo usada (para no repetir objeto en portadas vecinas)
+  coverStyle?: number;  // índice del estilo de portada usado (para no repetir estilo en portadas vecinas)
   origin: Origin;
   paid: boolean;
   created: number;

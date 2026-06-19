@@ -14,7 +14,7 @@
 import type { Profile, Chapter, FormatKey, Story, StoryBible } from "./types";
 import { FORMATS } from "./constants";
 import { deterministicBible, buildBible } from "./bible";
-import { LLMProvider, getProvider } from "./provider";
+import { LLMProvider, getProvider, looksLikeRefusal } from "./provider";
 import { assessOutput, logIncident } from "./safety";
 
 /* ============================ RUTA SÍNCRONA ============================ */
@@ -58,8 +58,9 @@ export async function writeSynopsis(
     `Tropos: ${bible.tropes.join(", ")}\nFormato: ${FORMATS[format].label}.${cont}${axes}`;
   try {
     const { text } = await model.complete({ system, messages: [{ role: "user", content: user }], maxTokens: 220, temperature: 0.8 });
-    if (text.trim() && assessOutput(text).ok) return text.trim();
-    logIncident("synopsis: salida insegura/vacía, fallback");
+    const clean = stripMarkdown(text.trim());
+    if (clean && !looksLikeRefusal(clean) && assessOutput(clean).ok) return clean;
+    logIncident("synopsis: salida insegura/rechazo/vacía, fallback");
   } catch {
     logIncident("synopsis: modelo falló, fallback");
   }
@@ -112,6 +113,12 @@ export async function writeChapter(args: {
       ? `COMPLICACIÓN (tercio final): introduce o intensifica esta vuelta de tuerca: ${bible.complication}.\n`
       : "");
 
+  // Escenas que la lectora pidió, asignadas por el código a ESTE capítulo.
+  const sceneHere = (bible.scenePlan || []).filter((s) => s.chapter === index).map((s) => s.directive);
+  const sceneDirective = sceneHere.length
+    ? `ESCENAS PEDIDAS PARA ESTE CAPÍTULO (intégralas con naturalidad dentro de la trama y respeta el nivel de calor): ${sceneHere.join("; ")}.\n`
+    : "";
+
   // Solo el capítulo 1: arranca distinto en cada libro según los ejes de variación.
   const opening = index === 1
     ? `APERTURA DEL LIBRO (capítulo 1): ${bible.openingTone || "engancha desde la primera línea"}. ` +
@@ -130,6 +137,7 @@ export async function writeChapter(args: {
     "3) NO vuelvas a presentar a personajes ya presentados. " +
     "4) Avanza ÚNICAMENTE el objetivo de ESTE capítulo. " +
     "No incluyas encabezados, títulos ni notas: solo la prosa del capítulo. " +
+    "Escribe en PROSA PLANA: nada de Markdown, sin asteriscos (* o **) ni almohadillas (#); los diálogos van con raya (—), nunca entre asteriscos. " +
     (bible.atmosphere ? `ATMÓSFERA DEL GÉNERO (cúmplela en cada escena): ${bible.atmosphere} ` : "") +
     heatDirective(bible.heat);
 
@@ -144,6 +152,7 @@ export async function writeChapter(args: {
     `LO OCURRIDO HASTA AHORA:\n${soFar || "(este es el comienzo del libro)"}\n\n` +
     (opening ? `${opening}\n\n` : "") +
     (plotDirectives ? `${plotDirectives}\n` : "") +
+    (sceneDirective ? `${sceneDirective}\n` : "") +
     `Escribe el CAPÍTULO ${index} de ${total}. Objetivo exclusivo de este capítulo: ${beat}. ` +
     `Empieza justo donde terminó el capítulo anterior y avanza la trama. ` +
     `Cierra el capítulo con una frase completa; no lo dejes a medias.`;
@@ -155,9 +164,9 @@ export async function writeChapter(args: {
       maxTokens: 2200,
       temperature: 0.9,
     });
-    const body = trimToLastSentence(text.trim());
-    if (body && assessOutput(body).ok) return { t: chapterTitle(index, beat), b: body };
-    logIncident("chapter: salida insegura/vacía, fallback determinista");
+    const body = cleanChapterText(trimToLastSentence(text.trim()));
+    if (body && !looksLikeRefusal(body) && assessOutput(body).ok) return { t: chapterTitle(index, beat), b: body };
+    logIncident("chapter: salida insegura/rechazo/vacía, fallback determinista");
   } catch {
     logIncident("chapter: modelo falló, fallback determinista");
   }
@@ -173,6 +182,46 @@ function trimToLastSentence(text: string): string {
   const m = t.match(/[\s\S]*[.!?…"”»]/); // hasta el último cierre de frase
   if (m && m[0].length > 200) return m[0].trimEnd();
   return t; // si no hay buen punto de corte, devuélvelo tal cual
+}
+
+/** Quita artefactos de Markdown (negritas/cursivas con * o _, encabezados #,
+    citas >) que el lector mostraría literales. Normaliza los separadores de
+    escena (***, ---, * * *) a "* * *". NO toca el texto, solo el formato. */
+function stripMarkdown(raw: string): string {
+  let t = (raw || "").replace(/\r/g, "");
+  // separadores de escena -> sentinela temporal (para no borrar sus asteriscos)
+  t = t.replace(/^[ \t]*([*\-_=]\s*){3,}[ \t]*$/gm, "\u0000SC\u0000");
+  // encabezados y citas por línea
+  t = t.replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "").replace(/^[ \t]{0,3}>[ \t]?/gm, "");
+  // cursivas con guion bajo: _texto_ -> texto (conservador, acotado por límites)
+  t = t.replace(/(^|[\s(¡¿"“])_([^_\n]+?)_(?=[\s.,;:!?)"”…—-]|$)/g, "$1$2");
+  // negritas/cursivas con asterisco: quita TODOS los * (el divisor está a salvo)
+  t = t.replace(/\*/g, "");
+  // restaura el separador de escena, aislado por líneas en blanco
+  t = t.replace(/\s*\u0000SC\u0000\s*/g, "\n\n* * *\n\n");
+  // limpia espacios al final de línea y colapsa saltos
+  t = t.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return t;
+}
+
+/** Limpia un capítulo: además del Markdown, descarta un encabezado redundante
+    al inicio ("**CAPÍTULO 5: …**", "# …"), porque la app ya pone el título. */
+function cleanChapterText(raw: string): string {
+  const lines = (raw || "").replace(/\r/g, "").split("\n");
+  while (lines.length && !lines[0].trim()) lines.shift();
+  if (lines.length) {
+    const firstRaw = lines[0].trim();
+    const noMd = firstRaw.replace(/^[*_#>\s]+/, "").replace(/[*_]+$/, "").trim();
+    const isMdHeading = /^#{1,6}\s+\S/.test(firstRaw);
+    // solo lo tratamos como encabezado de capítulo si trae número, ":" o markdown
+    const isChapterHeading =
+      /^cap[ií]tulo\b/i.test(noMd) && (/\d/.test(noMd) || noMd.includes(":") || /[*#]/.test(firstRaw));
+    if (isMdHeading || isChapterHeading) {
+      lines.shift();
+      while (lines.length && !lines[0].trim()) lines.shift();
+    }
+  }
+  return stripMarkdown(lines.join("\n"));
 }
 
 /** Construye una biblia con modelo (re-exporta buildBible para comodidad). */

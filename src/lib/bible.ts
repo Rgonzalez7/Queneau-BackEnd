@@ -304,10 +304,119 @@ function defaultTraits(role: CharacterRole, tone: string): string[] {
   }
 }
 
+/* ------- pools para "Lo elige Queneau" (autopick): sembrados por libro ------- */
+const HEAT_POOL = ["cálido", "picante", "explícito", "explícito"]; // sesgo a explícito
+const DARKNESS_POOL = ["dark-light", "dark", "dark", "very-dark", ""];
+const ARCHETYPE_POOL = ["El Villano", "El Rey", "El Protector", "El Acosador", "El Psicópata", "El Monstruo", "El Héroe Roto", "El Príncipe Bratva"];
+const TONE_POOL = ["oscuro", "tenso", "sensual", "sombrío", "emotivo", "angsty"];
+const POV_POOL = ["primera persona dual", "primera persona única", "tercera persona"];
+const PACING_POOL = ["slow burn", "ritmo medio", "rápido / intenso"];
+const TROPE_POOL = [
+  "enemigos a amantes", "amor prohibido", "obsesión", "protagonista posesivo", "morally grey",
+  "proximidad forzada", "solo una cama", "matrimonio arreglado", "jefe / empleada", "guardaespaldas",
+  "millonario dominante", "mejor amigo del hermano", "stalker", "secuestro", "cautiverio", "venganza",
+  "cómplices de crimen", "segunda oportunidad", "slow burn", "vínculo predestinado",
+];
+
+function sampleN(arr: string[], n: number, rnd: () => number): string[] {
+  const pool = [...arr];
+  const out: string[] = [];
+  for (let i = 0; i < n && pool.length; i++) out.push(pool.splice(Math.floor(rnd() * pool.length), 1)[0]);
+  return out;
+}
+
+/** Semilla estable del libro: storyId si se pasó; si no, derivada del perfil. */
+function bibleSeed(profile: Profile, seedStr?: string): number {
+  return hashStr(seedStr ?? JSON.stringify({ g: profile.genre, t: profile.tone, tr: profile.tropes, h: profile.heat_level }));
+}
+
+/** Aplica el autopick: cada eje en "aleatorio" (true) se siembra por libro; los
+ *  ejes en "manual" (false) conservan lo que eligió la lectora. Determinista por
+ *  seed, así la biblia es estable aunque se regenere. */
+export function resolveAutopick(profile: Profile, seed: number): Profile {
+  const ap = profile.autopick;
+  if (!ap) return profile; // perfil antiguo sin autopick: usar tal cual
+  const rnd = mulberry32((seed ^ 0x5bf03635) >>> 0); // flujo propio e independiente
+  const p: Profile = {
+    ...profile,
+    tropes: [...(profile.tropes || [])],
+    tone: [...(profile.tone || [])],
+    must_haves: [...(profile.must_haves || [])],
+    avoid: [...(profile.avoid || [])],
+    scenes: [...(profile.scenes || [])],
+    customScenes: [...(profile.customScenes || [])],
+  };
+  if (ap.intensity) {
+    p.heat_level = pickFrom(HEAT_POOL, rnd) as Profile["heat_level"];
+    p.darkness = pickFrom(DARKNESS_POOL, rnd) || undefined;
+    p.archetype = pickFrom(ARCHETYPE_POOL, rnd);
+  }
+  if (ap.tropes) p.tropes = sampleN(TROPE_POOL, 2 + Math.floor(rnd() * 3), rnd); // 2-4
+  if (ap.toneStructure) {
+    p.tone = sampleN(TONE_POOL, 2, rnd);
+    p.pov = pickFrom(POV_POOL, rnd);
+    p.pacing = pickFrom(PACING_POOL, rnd);
+  }
+  if (ap.details) { p.must_haves = []; p.avoid = []; }   // Queneau decide: sin fijos
+  if (ap.scenes) { p.scenes = []; p.customScenes = []; } // sin escenas forzadas
+  return p;
+}
+
+/* ------- reparte las escenas pedidas por la lectora a lo largo del arco -------
+   El CÓDIGO decide en qué capítulo cae cada escena (por % del libro); el modelo
+   solo la escribe. Tipo+cantidad => repartidas (auto). Escena libre => banda
+   inicio/medio/final, o auto. */
+function buildScenePlan(profile: Profile, n: number, seed: number): { chapter: number; directive: string }[] {
+  const rnd = mulberry32((seed ^ 0x27d4eb2f) >>> 0);
+  const plan: { chapter: number; directive: string }[] = [];
+  const autoPool: string[] = [];
+
+  for (const s of profile.scenes || []) {
+    const count = Math.max(0, Math.min(20, Math.floor(s.count || 0)));
+    for (let i = 0; i < count; i++) autoPool.push(`una escena de ${s.type}`);
+  }
+
+  const bands: Record<string, [number, number]> = {
+    inicio: [1, Math.max(1, Math.floor(n / 3))],
+    medio: [Math.max(1, Math.floor(n / 3) + 1), Math.max(1, Math.ceil((2 * n) / 3))],
+    final: [Math.max(1, Math.ceil((2 * n) / 3) + 1), n],
+  };
+  const place = (lo: number, hi: number): number => {
+    lo = Math.max(1, Math.min(n, lo));
+    hi = Math.max(lo, Math.min(n, hi));
+    return lo + Math.floor(rnd() * (hi - lo + 1));
+  };
+  for (const cs of profile.customScenes || []) {
+    const text = (cs.text || "").trim();
+    if (!text) continue;
+    const directive = `la escena que pediste: «${text}»`;
+    if (cs.position && cs.position !== "auto" && bands[cs.position]) {
+      const [lo, hi] = bands[cs.position];
+      plan.push({ chapter: place(lo, hi), directive });
+    } else {
+      autoPool.push(directive);
+    }
+  }
+
+  // reparte el pool "auto" espaciado, evitando el cap. 1 (gancho) si hay margen
+  if (autoPool.length) {
+    const start = n >= 4 ? 2 : 1;
+    const span = n - start + 1;
+    autoPool.forEach((d, i) => {
+      const ch = autoPool.length === 1
+        ? start + Math.floor(rnd() * span)
+        : start + Math.round((i * (span - 1)) / (autoPool.length - 1));
+      plan.push({ chapter: Math.min(n, Math.max(1, ch)), directive: d });
+    });
+  }
+  return plan;
+}
+
 /* --------------------------- biblia determinista --------------------------- */
 export function deterministicBible(profile: Profile, format?: FormatKey, seedStr?: string): StoryBible {
   const n = chaptersFor(format);
-  const seed = hashStr(seedStr ?? JSON.stringify({ g: profile.genre, t: profile.tone, tr: profile.tropes, h: profile.heat_level }));
+  const seed = bibleSeed(profile, seedStr);
+  profile = resolveAutopick(profile, seed); // aplica "Lo elige Queneau" eje por eje
   const rnd = mulberry32(seed);
   const tone = toneStr(profile);
   const names = castNames(profile, rnd); // nombres por sabor del subgénero
@@ -355,6 +464,7 @@ export function deterministicBible(profile: Profile, format?: FormatKey, seedStr
     complication: v.complication,
     atmosphere: atmosphere || undefined,
     arcTemplate: ARC_TEMPLATES[v.arcTpl].name,
+    scenePlan: buildScenePlan(profile, n, seed),
     arc: buildArc(n, v.arcTpl),
   };
 }
@@ -471,6 +581,9 @@ export async function buildBible(
 
   // 2) base determinista (estructura + fallback de lenguaje)
   const base = deterministicBible(profile, opts?.format, opts?.seed);
+  // perfil EFECTIVO (con autopick aplicado) para que el prompt del modelo use
+  // exactamente los mismos valores que la base determinista.
+  const eff = resolveAutopick(profile, bibleSeed(profile, opts?.seed));
 
   // 3) lenguaje del modelo (con red de seguridad)
   const llm = opts?.llm ?? getProvider();
@@ -480,7 +593,7 @@ export async function buildBible(
   let mBeats: string[] = [];
 
   try {
-    const { system, user } = buildPrompt(profile, n, base);
+    const { system, user } = buildPrompt(eff, n, base);
 
     // JSON estructurado: temperatura baja y tokens holgados para que no se trunque.
     // Hasta 2 intentos: el modelo a veces devuelve JSON incompleto/no parseable.

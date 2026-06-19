@@ -196,43 +196,92 @@ const LIGHTING = [
   "high-contrast rim lighting on a dark background",
   "atmospheric foggy backlight with godrays",
 ];
-const COMPOSITION = [
-  "symmetrical centered emblem composition",
-  "ornate centered heraldic crest composition",
-  "elegant centered still-life composition",
+
+/* ESTILOS de portada: cada uno es una receta distinta de composición + medio +
+   acabado. Se elige uno por libro (evitando los recientes) para que la
+   biblioteca no se sienta toda igual aunque cambie el objeto. Todos respetan
+   "sin texto ni personas" (el título lo dibuja la tarjeta encima). */
+type StyleFn = (subject: string, palette: string, lighting: string) => string;
+const COVER_STYLES: { name: string; build: StyleFn }[] = [
+  {
+    name: "emblema-ornamentado",
+    build: (s, p, l) =>
+      `A central emblem of ${s}. ${p}. ${l}. Symmetrical centered heraldic composition, baroque ornate filigree, gold-foil accents, intricate hyper-detailed rendering, embossed look, glossy and luxurious`,
+  },
+  {
+    name: "minimalista",
+    build: (s, p, l) =>
+      `A single small ${s}, isolated. ${p}. ${l}. Minimalist composition with vast empty negative space and dark breathing room, refined and modern, subtle film grain, understated and elegant`,
+  },
+  {
+    name: "macro-textura",
+    build: (s, p, l) =>
+      `Extreme close-up macro of ${s}. ${p}. ${l}. Full-bleed luxurious textured surface (black silk, velvet, wet marble, satin), shallow depth of field, fine dewdrops and tactile detail, abstract and sensual atmosphere`,
+  },
+  {
+    name: "oleo",
+    build: (s, p, l) =>
+      `${s}, rendered as a moody fine-art oil painting. ${p}. ${l}. Visible brushstrokes, old-master chiaroscuro, painterly baroque still life, dramatic gallery-quality artwork`,
+  },
+  {
+    name: "grabado-dorado",
+    build: (s, p) =>
+      `${s}, as an intricate gold line engraving and etching on a flat near-black background. ${p}. Fine elegant linework, vintage botanical-illustration and tattoo style, graphic and symmetrical, flat 2D, no photographic depth`,
+  },
+  {
+    name: "floral-gotico",
+    build: (s, p, l) =>
+      `${s} surrounded by dense moody gothic florals and dark overgrown foliage. ${p}. ${l}. Lush decadent botanical arrangement filling the frame, baroque dark-cottagecore, rich and ornate`,
+  },
+  {
+    name: "art-deco",
+    build: (s, p) =>
+      `${s} framed by an ornate art-deco geometric border. ${p}. Symmetrical deco linework, gold lines on black, 1920s luxury poster style, elegant geometry, crisp and graphic`,
+  },
+  {
+    name: "atmosferico-humo",
+    build: (s, p, l) =>
+      `${s} emerging from swirling smoke, embers and haze. ${p}. ${l}. Near-abstract atmospheric mood, drifting particles and godrays, soft-focus dark background, mysterious and cinematic`,
+  },
 ];
 
 export function buildCoverPrompt(
   bible: StoryBible,
   seedStr: string,
-  avoid: number[] = []
-): { prompt: string; negative: string; seed: number; family: number } {
+  avoid: number[] = [],
+  avoidStyles: number[] = []
+): { prompt: string; negative: string; seed: number; family: number; style: number } {
   const rnd = mulberry32(hashStr(seedStr || "queneau"));
-  // elige una familia evitando las recién usadas (si es posible)
+  // elige una familia de objeto evitando las recién usadas (si es posible)
   let fi = Math.floor(rnd() * MOTIF_FAMILIES.length);
   for (let tries = 0; tries < 8 && avoid.includes(fi); tries++) {
     fi = Math.floor(rnd() * MOTIF_FAMILIES.length);
   }
+  // elige un ESTILO evitando los recién usados (si es posible)
+  let si = Math.floor(rnd() * COVER_STYLES.length);
+  for (let tries = 0; tries < 8 && avoidStyles.includes(si); tries++) {
+    si = Math.floor(rnd() * COVER_STYLES.length);
+  }
+
   const subject = pick(MOTIF_FAMILIES[fi], rnd); // motivo dentro de la familia
   const palette = pick(PALETTES, rnd);
   const lighting = pick(LIGHTING, rnd);
-  const composition = pick(COMPOSITION, rnd);
-  const darker = (bible.darkness || "").toLowerCase().includes("extreme") ? " very dark, low-key," : "";
+  const darker = (bible.darkness || "").toLowerCase().includes("extreme") ? " Very dark and low-key." : "";
 
+  const styleCore = COVER_STYLES[si].build(subject, palette, lighting);
   const prompt =
-    `Professional dark romance book cover, a central emblem of ${subject}, ${palette}, ${lighting}, ${composition}, ` +
-    `baroque ornate filigree, gold-foil accents, intricate hyper-detailed rendering, dramatic and striking, ` +
-    `luxurious, glossy, deep rich shadows, cinematic,${darker} embossed look, ` +
-    `strong vignette, darkened top and bottom edges, ` +
-    `no text, no typography, no letters, no watermark, no people, no faces.`;
+    `Professional dark romance book cover. ${styleCore}. ` +
+    `Premium, striking and decadent dark-romance aesthetic.${darker} ` +
+    `Strong vignette with darkened top and bottom edges. ` +
+    `No text, no typography, no letters, no title, no watermark, no people, no faces, no human figures.`;
   const negative =
     "people, person, human, humans, man, woman, child, baby, infant, toddler, doll, figure, " +
     "silhouette, mannequin, statue, bust, portrait, face, faces, eyes, hands, arms, legs, body, skin, " +
     "nudity, explicit, " +
     "text, words, letters, title, typography, watermark, signature, logo, ui, frame border, " +
-    "deformed, low quality, blurry, jpeg artifacts, cartoon, childish, oversaturated, flat";
+    "deformed, low quality, blurry, jpeg artifacts, cartoon, childish, oversaturated, flat colors";
   const seed = hashStr(seedStr) % 2147483647;
-  return { prompt, negative, seed, family: fi };
+  return { prompt, negative, seed, family: fi, style: si };
 }
 
 /* ---- llamada a fal.ai (síncrona) + descarga del PNG ---- */
@@ -289,17 +338,17 @@ export async function generateCover(storyId: string): Promise<void> {
     const job = await withDB((db) => {
       const s = db.stories.find((x) => x.id === storyId);
       if (!s || s.coverImage || !s.bibleSnapshot) return null;
-      // familias de las últimas portadas (db.stories va de más nuevo a más viejo)
-      // para no repetir el mismo objeto en portadas vecinas
+      // familias y estilos de las últimas portadas (db.stories va de más nuevo a
+      // más viejo) para no repetir el mismo objeto NI el mismo estilo en vecinas
       const recent: number[] = [];
+      const recentStyles: number[] = [];
       for (const st of db.stories) {
         if (st.id === storyId) continue;
-        if (typeof st.coverFamily === "number") {
-          recent.push(st.coverFamily);
-          if (recent.length >= 4) break;
-        }
+        if (typeof st.coverFamily === "number" && recent.length < 4) recent.push(st.coverFamily);
+        if (typeof st.coverStyle === "number" && recentStyles.length < 3) recentStyles.push(st.coverStyle);
+        if (recent.length >= 4 && recentStyles.length >= 3) break;
       }
-      return { bible: s.bibleSnapshot, avoid: recent };
+      return { bible: s.bibleSnapshot, avoid: recent, avoidStyles: recentStyles };
     });
     if (!job) return;
 
@@ -308,12 +357,14 @@ export async function generateCover(storyId: string): Promise<void> {
     //    (safety checker), reintenta con otra semilla/motivo hasta 3 veces.
     let buf: Buffer | null = null;
     let chosenFamily = -1;
+    let chosenStyle = -1;
     for (let attempt = 0; attempt < 3; attempt++) {
       const seedKey = attempt === 0 ? storyId : `${storyId}#${attempt}`;
-      const { prompt, negative, seed, family } = buildCoverPrompt(job.bible, seedKey, job.avoid);
+      const { prompt, negative, seed, family, style } = buildCoverPrompt(job.bible, seedKey, job.avoid, job.avoidStyles);
       const r = await falGenerate(prompt, negative, seed);
       buf = r.buf;
       chosenFamily = family;
+      chosenStyle = style;
       if (!r.blanked) break; // portada buena
       console.warn(`[cover] intento ${attempt + 1} salió en negro/censurado, reintento ${storyId}`);
     }
@@ -323,12 +374,13 @@ export async function generateCover(storyId: string): Promise<void> {
     await fs.mkdir(COVERS_DIR, { recursive: true });
     await fs.writeFile(path.join(COVERS_DIR, `${storyId}.png`), buf);
 
-    // 4) marca la ruta y la familia usada en la DB bajo lock
+    // 4) marca la ruta, la familia y el estilo usados en la DB bajo lock
     await withDB((db) => {
       const s = db.stories.find((x) => x.id === storyId);
       if (s) {
         s.coverImage = `/covers/${storyId}.png`;
         s.coverFamily = chosenFamily;
+        s.coverStyle = chosenStyle;
       }
       return null;
     });
