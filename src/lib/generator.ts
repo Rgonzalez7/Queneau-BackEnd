@@ -14,7 +14,7 @@
 import type { Profile, Chapter, FormatKey, Story, StoryBible } from "./types";
 import { FORMATS } from "./constants";
 import { deterministicBible, buildBible } from "./bible";
-import { LLMProvider, getProvider, looksLikeRefusal } from "./provider";
+import { LLMProvider, getProvider, looksLikeRefusal, looksLikeGarbage } from "./provider";
 import { assessOutput, logIncident } from "./safety";
 
 /* ============================ RUTA SÍNCRONA ============================ */
@@ -96,9 +96,9 @@ export async function writeSynopsis(
     cont;
 
   try {
-    const { text } = await model.complete({ system, messages: [{ role: "user", content: user }], maxTokens: 360, temperature: 0.95 });
+    const { text } = await model.complete({ system, messages: [{ role: "user", content: user }], maxTokens: 360, temperature: 0.85 });
     const clean = stripMarkdown(text.trim());
-    if (clean && !looksLikeRefusal(clean) && assessOutput(clean).ok) return clean;
+    if (clean && !looksLikeRefusal(clean) && !looksLikeGarbage(clean) && assessOutput(clean).ok) return clean;
     logIncident("synopsis: salida insegura/rechazo/vacía, fallback");
   } catch {
     logIncident("synopsis: modelo falló, fallback");
@@ -354,10 +354,10 @@ export async function writeChapter(args: {
       system,
       messages: [{ role: "user", content: user }],
       maxTokens: 2200,
-      temperature: 0.9,
+      temperature: 0.8,
     });
     const body = cleanChapterText(trimToLastSentence(text.trim()));
-    if (body && !looksLikeRefusal(body) && assessOutput(body).ok) return { t: chapterTitle(index, beat), b: body };
+    if (body && !looksLikeRefusal(body) && !looksLikeGarbage(body) && assessOutput(body).ok) return { t: chapterTitle(index, beat), b: body };
     logIncident("chapter: salida insegura/rechazo/vacía, fallback determinista");
   } catch {
     logIncident("chapter: modelo falló, fallback determinista");

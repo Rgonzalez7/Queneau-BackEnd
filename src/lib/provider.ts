@@ -148,6 +148,39 @@ export function looksLikeRefusal(text: string): boolean {
   return ES_EDGE_REFUSAL.some((re) => re.test(head) || re.test(tail));
 }
 
+/* Detecta salida ININTELIGIBLE (galimatías): tokens rotos, fugas de inglés en
+   MAYÚSCULAS, palabras imposibles en español, glitches de puntuación. Pasa el
+   texto a la SIGUIENTE opción del chain en vez de mostrar word-salad. Calibrado
+   para NO marcar prosa legítima (gritos en mayúscula, carteles, nombres rusos). */
+export function looksLikeGarbage(textRaw: string): boolean {
+  const text = (textRaw || "").trim();
+  if (text.length < 60) return false;
+  const words = text.match(/[\p{L}]+/gu) || [];
+  if (words.length < 15) return false;
+  const VOW = /[aeiouáéíóúüy]/i;
+  let noVowel = 0, overlong = 0, consoRun = 0;
+  for (const w of words) {
+    if (w.length >= 4 && !VOW.test(w)) noVowel++;
+    if (w.length > 20) overlong++;
+    if (/[bcdfghjklmnpqrstvwxyzñ]{5,}/i.test(w)) consoRun++;
+  }
+  // señales DURAS: varias palabras sin vocal, clusters imposibles o palabras larguísimas
+  if (noVowel >= 2 || consoRun >= 1 || overlong >= 1) return true;
+
+  let score = 0;
+  // MAYÚSCULAS latinas embebidas (fuga de tokens, p.ej. "ter LANGUAGE")
+  if (/[a-záéíóúñ,;]\s+[A-ZÁÉÍÓÚÑ]{4,}\b/.test(text)) score += 2;
+  // letras sueltas (consonante aislada mid-frase, p.ej. "da c—")
+  if ((text.match(/(^|\s)[bcdfghjklmnpqrstvwxz](\s|—|-|\.)/gi) || []).length >= 1) score += 1;
+  // espacio antes de punto/coma (glitch de formato), repetido
+  if ((text.match(/\s+[.,]/g) || []).length >= 2) score += 1;
+  // palabra pegada a "(" (falta de espacio)
+  if (/[a-záéíóúñ]\(/i.test(text)) score += 1;
+  // arranques de palabra imposibles en español
+  if ((text.match(/\b(ns|tz|gt|hs|sd|fk|mn|tl|zr|dn|kt)[a-záéíóú]/gi) || []).length >= 1) score += 1;
+  return score >= 3;
+}
+
 /* ----------------------------- MockProvider -----------------------------
    Determinista: misma entrada -> misma salida. No usa red, no gasta nada.
    Sirve para probar el pipeline completo (opening -> bible -> capítulo 1)
@@ -226,6 +259,8 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 
   async complete(input: CompleteInput): Promise<CompleteResult> {
+    const reqTemp = input.temperature ?? 0.9;
+    const capTemp = Number(process.env.GENERATOR_TEMPERATURE);
     const body = {
       model: this.model,
       messages: [
@@ -233,7 +268,7 @@ export class OpenAICompatProvider implements LLMProvider {
         ...input.messages,
       ],
       max_tokens: input.maxTokens ?? 1024,
-      temperature: input.temperature ?? 0.9,
+      temperature: isFinite(capTemp) ? Math.min(reqTemp, capTemp) : reqTemp,
     };
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -346,6 +381,7 @@ export class ChainProvider implements LLMProvider {
           // Vacío o rechazo = fallo "real": salta al siguiente modelo (no reintenta).
           if (!text) throw new ProviderError("respuesta vacía", false);
           if (looksLikeRefusal(text)) throw new ProviderError("parece un rechazo del modelo", false);
+          if (looksLikeGarbage(text)) throw new ProviderError("salida ininteligible (galimatías)", false);
           if (i > 0) console.warn(`[chain] generado con respaldo "${model}" (los anteriores no sirvieron)`);
           return out;
         } catch (e) {
