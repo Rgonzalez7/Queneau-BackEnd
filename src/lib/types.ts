@@ -58,6 +58,7 @@ export interface StoryBible {
   setting: string;
   characters: BibleCharacter[];
   tone: string;
+  pov?: string;          // punto de vista (para adaptar el formato de la sinopsis)
   heat: string; // heat_level del perfil
   archetype?: string; // arquetipo del interés
   darkness?: string;  // nivel de oscuridad
@@ -73,6 +74,13 @@ export interface StoryBible {
   complication?: string;  // giro extra del tercio final
   atmosphere?: string;    // atmósfera obligatoria del género
   arcTemplate?: string;   // nombre de la plantilla de arco elegida
+  // arco de personaje (la Mentira y la necesidad moral) — profundidad, no relleno
+  lie?: string;           // la creencia falsa que sostiene la protagonista
+  need?: string;          // la verdad moral que debe aprender (choca con la mentira)
+  wound?: string;         // la herida de origen que creó la mentira
+  flaw?: string;          // el defecto que la sabotea bajo presión
+  facade?: string;        // la máscara que muestra al mundo
+  interestContradiction?: string; // la grieta entre lo que el interés dice y hace
   // escenas pedidas por la lectora, repartidas por capítulo (código decide DÓNDE)
   scenePlan?: { chapter: number; directive: string }[];
   arc: { chapter: number; beat: string }[];
@@ -110,6 +118,27 @@ export interface DB {
   account: Account;
   profiles: Profile[];
   stories: Story[];
+  craftStats?: CraftStats; // señal de craft AGREGADA y anónima (sin texto ni obras)
+}
+
+/* Estadística AGREGADA de estructura narrativa aprendida de PDFs subidos.
+   Solo categorías de un vocabulario cerrado + conteos + posiciones (0-100).
+   No contiene texto, nombres, ni filas por obra: no se puede reconstruir nada. */
+export interface CraftStats {
+  samples: number;
+  updated: number;
+  genre: Record<string, number>;
+  pacing: Record<string, number>;
+  engine: Record<string, number>;
+  power: Record<string, number>;
+  heroine: Record<string, number>;
+  heat: Record<string, number>;
+  imRegister: Record<string, number>;  // registro del lenguaje íntimo
+  imPacing: Record<string, number>;    // ritmo de la escena íntima
+  imInitiator: Record<string, number>; // quién inicia
+  scenes: Record<string, number>;      // contabilidad por tipo de escena
+  tropePairs: Record<string, number>; // "a|b" en orden alfabético -> conteo
+  beatPos: Record<string, { n: number; sum: number; hist: number[] }>; // pos media + histograma (10 cubos)
 }
 
 export interface FormatInfo {

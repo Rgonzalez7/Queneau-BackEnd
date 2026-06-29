@@ -9,10 +9,202 @@
    Es heurístico (stub mejorable): el día que quieras, el modelo puede hacer
    esta extracción con más finura, pero la decisión de bloqueo sigue en código.
 --------------------------------------------------------------------------- */
-import type { Profile, HeatLevel } from "./types";
+import type { Profile, HeatLevel, SceneSpec } from "./types";
 import { assessOutput, logIncident } from "./safety";
+import { getProvider } from "./provider";
 
 export type ProfileDraft = Partial<Profile> & { blocked: boolean };
+
+/* Tipos de escena — espejo EXACTO del paso "Escenas" del frontend. */
+const A_SCENE_TYPES = [
+  "acción", "sexo explícito", "mutilación / gore", "tortura", "persecución",
+  "confrontación / pelea", "traición", "celos", "peligro / secuestro",
+  "reconciliación", "muerte de un personaje", "castigo",
+];
+
+/* --------- catálogos del PERFIL (espejo EXACTO del frontend) ---------
+   Los labels deben coincidir letra a letra para que el formulario los marque
+   como seleccionados. El modelo solo puede elegir de estas listas. */
+const A_TROPES = [
+  // Opuestos complementarios
+  "Grumpy x Sunshine", "Introvertido x Extrovertido", "Frío x Cariñoso",
+  "Ordenado x Caótico", "Serio x Bromista", "Inocente x Experimentado", "Tradicional x Rebelde",
+  // Enemigos y rivales
+  "Enemies to Lovers", "Rivales académicos", "Rivales empresariales", "Mafias rivales",
+  "Familias enemigas", "Policía x Criminal", "Espía x Espía enemigo", "Competidores deportivos",
+  // Proximidad forzada
+  "Compañeros de habitación", "Matrimonio arreglado", "Matrimonio por conveniencia",
+  "Fingir noviazgo", "Protección de testigos", "Encerrados juntos", "Compartir misión",
+  // Relaciones prohibidas
+  "Profesor x Alumna", "Guardaespaldas x Protegida", "Jefe x Empleada",
+  "Mejor amigo del hermano", "Sacerdote x Mujer", "Mafia rival",
+  // Dark romance
+  "Obsesor x Obsesionada", "Stalker x Víctima", "Villano x Heroína", "Psicópata x Psicópata",
+  "Mafia Boss x Heroína", "Depredador x Presa", "Manipulador x Manipuladora",
+  // Protector
+  "Guardaespaldas x Cantante", "Detective x Víctima", "Militar x Testigo",
+  "Mafioso x Mujer perseguida", "Mercenario x Rehén",
+  // Segunda oportunidad
+  "Exnovios", "Amor de infancia", "Ex prometidos", "Amor perdido",
+  // Amigos a amantes
+  "Mejores amigos", "Amigos de infancia", "Amigos con beneficios", "Compañeros de universidad",
+  // Mafia
+  "Don x Hija de rival", "Sicario x Objetivo", "Consigliere x Princesa mafia",
+  "Mafia rusa x Mafia italiana", "Viuda mafia x Mano derecha", "Capo x Fiscal",
+  // Militares y fuerzas especiales
+  "Comandante x Analista", "Fuerzas especiales x Traductora", "Soldado x Periodista",
+  "Militar x Doctora", "Francotirador x Espía", "Operador élite x Científica",
+  // Fantasía oscura
+  "Demonio x Bruja", "Ángel x Demonio", "Rey Fae x Humana",
+  "Vampiro x Cazadora", "Dragón x Humana", "Dios x Mortal",
+  // Thriller y suspense
+  "Detective x Sospechosa", "Detective x Criminal", "Perfilador x Asesina serial",
+  "Agente del FBI x Informante", "Hacker x Agente secreto",
+  // Secretos y doble vida
+  "Mafioso fingiendo ser empresario", "Espía fingiendo ser profesor", "Reina oculta", "Policía infiltrada",
+  // Tropos populares
+  "Touch Her And Die", "Burn The World For Her", "Who Did This To You?", "One Bed",
+  "Forced Proximity", "Secret Identity", "Forbidden Love", "Revenge Romance",
+  "Slow Burn", "Fast Burn", "Redemption Arc", "He Falls First", "She Falls First", "Mutual Obsession",
+];
+const A_HEAT: HeatLevel[] = ["cerradas", "cálido", "picante", "explícito"];
+const A_TONE = ["oscuro", "tenso", "angsty", "tierno", "sensual", "sombrío", "emotivo", "con humor"];
+const A_POV = ["primera persona dual", "primera persona única", "tercera persona", "múltiple"];
+const A_PACING = ["slow burn", "ritmo medio", "rápido / intenso"];
+const A_ARCHETYPE = [
+  "El Villano", "El Monstruo", "El Rey", "El Principe Bratva", "El Psicopata",
+  "El Acosador", "El Protector", "El Heore Roto", "El Golden Retriever",
+];
+const A_DARKNESS = ["dark-light", "dark", "very-dark", "extreme-dark"];
+const A_GENRES = [
+  "dark romance", "romance mafia", "romance paranormal", "romance contemporáneo",
+  "romance histórico", "romance de terror", "romance militar", "romance fantástico",
+  "new adult", "romance erótico",
+];
+
+const normv = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+function pickVocab(value: unknown, vocab: string[]): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const v = normv(value);
+  return vocab.find((o) => normv(o) === v);
+}
+function pickVocabMany(value: unknown, vocab: string[], max: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const it of value) {
+    const m = pickVocab(it, vocab);
+    if (m && !seen.has(m)) { seen.add(m); out.push(m); if (out.length >= max) break; }
+  }
+  return out;
+}
+function safeJson(raw: string): Record<string, unknown> | null {
+  const s = raw.replace(/```json|```/g, "").trim();
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a < 0 || b <= a) return null;
+  try { return JSON.parse(s.slice(a, b + 1)); } catch { return null; }
+}
+/** Valida las escenas detectadas contra el catálogo; cuenta acotada 1-10. */
+function parseScenes(value: unknown): SceneSpec[] {
+  if (!Array.isArray(value)) return [];
+  const out: SceneSpec[] = [];
+  const seen = new Set<string>();
+  for (const it of value) {
+    if (!it || typeof it !== "object") continue;
+    const type = pickVocab((it as Record<string, unknown>).type, A_SCENE_TYPES);
+    if (!type || seen.has(type)) continue;
+    let count = Math.round(Number((it as Record<string, unknown>).count));
+    if (!isFinite(count) || count < 1) count = 1;
+    count = Math.min(10, count);
+    seen.add(type);
+    out.push({ type, count });
+  }
+  return out;
+}
+
+const PROFILE_SYSTEM = [
+  "Eres un analista de gustos de novela romántica. Recibes un fragmento de un libro.",
+  "Devuelve SOLO un objeto JSON describiendo el GUSTO que refleja, usando EXCLUSIVAMENTE las etiquetas de los catálogos (copia el texto de la etiqueta tal cual).",
+  "PROHIBIDO copiar frases, nombres o detalles únicos de la obra. Solo categorías.",
+  "Elige los tropes que de verdad estén presentes (varios si aplica). Si un campo no aplica, omítelo.",
+  "",
+  "CATÁLOGOS:",
+  `GÉNERO (uno; si ninguno encaja, usa una frase corta): ${A_GENRES.join(" | ")}`,
+  `TROPES (varios): ${A_TROPES.join(" | ")}`,
+  `INTENSIDAD (una): ${A_HEAT.join(" | ")}`,
+  `TONO (varios): ${A_TONE.join(" | ")}`,
+  `POV (uno): ${A_POV.join(" | ")}`,
+  `RITMO (uno): ${A_PACING.join(" | ")}`,
+  `ARQUETIPO DEL INTERÉS (uno): ${A_ARCHETYPE.join(" | ")}`,
+  `OSCURIDAD (una): ${A_DARKNESS.join(" | ")}`,
+  `ESCENAS (las que aparezcan, con cuántas veces ~aproximado 1-5): ${A_SCENE_TYPES.join(" | ")}`,
+  "",
+  'Formato EXACTO, sin texto extra ni Markdown: {"genre":"","tropes":[],"heat":"","tone":[],"pov":"","pacing":"","archetype":"","darkness":"","scenes":[{"type":"","count":0}]}',
+].join("\n");
+
+/** Extracción RICA con modelo: mapea el texto a los catálogos del perfil.
+    Valida todo contra las listas (descarta lo que no esté). Sin texto guardado. */
+async function analyzeWithModel(text: string): Promise<Partial<Profile> | null> {
+  try {
+    const { text: out } = await getProvider().complete({
+      system: PROFILE_SYSTEM,
+      messages: [{ role: "user", content: text.slice(0, 14000) }],
+      maxTokens: 400,
+      temperature: 0.2,
+    });
+    const raw = safeJson(out);
+    if (!raw) return null;
+    const genreMatched = pickVocab(raw.genre, A_GENRES);
+    const genreFree = typeof raw.genre === "string" && raw.genre.trim().length > 1 && raw.genre.trim().length <= 40
+      ? raw.genre.trim().toLowerCase() : "";
+    const draft: Partial<Profile> = {
+      genre: genreMatched || genreFree || undefined,
+      tropes: pickVocabMany(raw.tropes, A_TROPES, 8),
+      heat_level: (pickVocab(raw.heat, A_HEAT) as HeatLevel) || null,
+      tone: pickVocabMany(raw.tone, A_TONE, 4),
+      pov: pickVocab(raw.pov, A_POV) || "",
+      pacing: pickVocab(raw.pacing, A_PACING) || "",
+      archetype: pickVocab(raw.archetype, A_ARCHETYPE) || "",
+      darkness: pickVocab(raw.darkness, A_DARKNESS) || "",
+      scenes: parseScenes(raw.scenes),
+    };
+    return draft;
+  } catch {
+    return null;
+  }
+}
+
+/** Punto de entrada del extractor de perfil: seguridad → modelo (rico) →
+    relleno con la heurística para lo que falte. El usuario revisa y ajusta. */
+export async function extractProfile(text: string): Promise<ProfileDraft> {
+  const safe = assessOutput(text);
+  if (!safe.ok) {
+    logIncident("extract: texto no permitido");
+    return { blocked: true };
+  }
+  const base = analyzeText(text); // heurística (siempre da algo)
+  if (base.blocked) return base;
+  const model = await analyzeWithModel(text);
+
+  // el modelo manda; la heurística rellena huecos
+  const merged: ProfileDraft = {
+    blocked: false,
+    source: "extraído",
+    genre: model?.genre || base.genre || "romance",
+    tropes: (model?.tropes && model.tropes.length ? model.tropes : base.tropes) || [],
+    heat_level: model?.heat_level ?? base.heat_level ?? null,
+    tone: (model?.tone && model.tone.length ? model.tone : base.tone) || [],
+    pov: model?.pov || base.pov || "",
+    pacing: model?.pacing || base.pacing || "",
+    archetype: model?.archetype || "",
+    darkness: model?.darkness || "",
+    scenes: model?.scenes || [],
+    must_haves: base.must_haves || [],
+    avoid: base.avoid || [],
+    settings: base.settings || [],
+  };
+  return merged;
+}
 
 function norm(s: string): string {
   return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");

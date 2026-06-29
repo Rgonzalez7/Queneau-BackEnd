@@ -253,8 +253,55 @@ const COMPLICATION = [
   "una pérdida que obliga a redefinir qué están dispuestos a perder",
   "un cambio de bando inesperado",
 ];
+/* ------- arco de personaje: la Mentira que cree y la necesidad moral que debe
+   aprender (más herida, defecto, fachada). Es lo que vuelve al personaje
+   contradictorio y vivo en vez de coherente y plano. Sembrado por libro. ------- */
+const LIE_NEED = [
+  { lie: "la vulnerabilidad es una debilidad que siempre se castiga", need: "dejarse ver de verdad no la destruye, la libera" },
+  { lie: "no puede confiar en nadie sin terminar traicionada", need: "confiar es un riesgo que vale la pena con la persona correcta" },
+  { lie: "el amor es otra forma de control y siempre termina doliendo", need: "el amor puede ser refugio y no jaula" },
+  { lie: "tiene que ser de piedra para sobrevivir", need: "su verdadera fuerza está en bajar la guardia, no en endurecerse" },
+  { lie: "no merece ser amada por lo que ha hecho o por lo que es", need: "merece ternura a pesar de su pasado" },
+  { lie: "el control es lo único que la mantiene a salvo", need: "soltar el control es justo lo que la salva" },
+  { lie: "sentir es perder; el deseo la vuelve débil", need: "sentir no la debilita, es lo que la mantiene viva" },
+  { lie: "si se queda quieta y obedece, el daño se detendrá", need: "su voz y su rabia son su poder, no su condena" },
+];
+const WOUND = [
+  "una traición temprana de quien debía protegerla",
+  "un abandono que nunca cicatrizó",
+  "un amor anterior que la usó y la desechó",
+  "violencia vivida de cerca que la endureció antes de tiempo",
+  "haber tenido que sobrevivir sola desde muy joven",
+  "una pérdida por la que se culpa en silencio",
+];
+const FLAW = [
+  "un orgullo que no la deja pedir ayuda",
+  "una necesidad de controlarlo todo y a todos",
+  "un cinismo que aparta a quien se acerca",
+  "una impulsividad autodestructiva bajo presión",
+  "una lealtad rígida que la ciega",
+  "una rabia que estalla justo cuando se siente vista",
+];
+const FACADE = [
+  "una frialdad impecable",
+  "una seguridad casi arrogante",
+  "una dulzura calculada que desarma",
+  "un humor afilado que desvía todo",
+  "una obediencia fingida",
+  "una indiferencia que no siente de verdad",
+];
+const INTEREST_CONTRADICTION = [
+  "dice protegerla mientras la usa para su propia venganza",
+  "predica lealtad pero miente en lo esencial",
+  "se muestra dueño de sí y por dentro está roto",
+  "ofrece refugio con una mano y cadena con la otra",
+  "desprecia el amor en voz alta y lo busca en secreto",
+  "castiga en ella lo que no se perdona a sí mismo",
+];
+
 function variationFor(seed: number) {
   const rnd = mulberry32((seed ^ 0x9e3779b9) >>> 0); // flujo independiente del de nombres
+  const ln = LIE_NEED[Math.floor(rnd() * LIE_NEED.length)];
   return {
     setup: pickFrom(SETUPS, rnd),
     power: pickFrom(POWER, rnd),
@@ -264,6 +311,13 @@ function variationFor(seed: number) {
     secret: pickFrom(SECRET, rnd),
     complication: pickFrom(COMPLICATION, rnd),
     arcTpl: Math.floor(rnd() * ARC_TEMPLATES.length),
+    // --- arco de personaje (la Mentira y la necesidad moral) ---
+    lie: ln.lie,
+    need: ln.need,
+    wound: pickFrom(WOUND, rnd),
+    flaw: pickFrom(FLAW, rnd),
+    facade: pickFrom(FACADE, rnd),
+    interestContradiction: pickFrom(INTEREST_CONTRADICTION, rnd),
   };
 }
 
@@ -312,10 +366,11 @@ const TONE_POOL = ["oscuro", "tenso", "sensual", "sombrío", "emotivo", "angsty"
 const POV_POOL = ["primera persona dual", "primera persona única", "tercera persona"];
 const PACING_POOL = ["slow burn", "ritmo medio", "rápido / intenso"];
 const TROPE_POOL = [
-  "enemigos a amantes", "amor prohibido", "obsesión", "protagonista posesivo", "morally grey",
-  "proximidad forzada", "solo una cama", "matrimonio arreglado", "jefe / empleada", "guardaespaldas",
-  "millonario dominante", "mejor amigo del hermano", "stalker", "secuestro", "cautiverio", "venganza",
-  "cómplices de crimen", "segunda oportunidad", "slow burn", "vínculo predestinado",
+  "Enemies to Lovers", "Forbidden Love", "Obsesor x Obsesionada", "Villano x Heroína",
+  "Mafia Boss x Heroína", "Capo x Fiscal", "Stalker x Víctima", "Depredador x Presa",
+  "Jefe x Empleada", "Profesor x Alumna", "Guardaespaldas x Protegida", "Encerrados juntos",
+  "Matrimonio por conveniencia", "Fingir noviazgo", "Exnovios", "Mejores amigos",
+  "Mutual Obsession", "Slow Burn", "Touch Her And Die", "Redemption Arc",
 ];
 
 function sampleN(arr: string[], n: number, rnd: () => number): string[] {
@@ -464,6 +519,13 @@ export function deterministicBible(profile: Profile, format?: FormatKey, seedStr
     complication: v.complication,
     atmosphere: atmosphere || undefined,
     arcTemplate: ARC_TEMPLATES[v.arcTpl].name,
+    lie: v.lie,
+    need: v.need,
+    wound: v.wound,
+    flaw: v.flaw,
+    facade: v.facade,
+    interestContradiction: v.interestContradiction,
+    pov: profile.pov || undefined,
     scenePlan: buildScenePlan(profile, n, seed),
     arc: buildArc(n, v.arcTpl),
   };

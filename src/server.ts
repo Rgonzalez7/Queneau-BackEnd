@@ -13,7 +13,8 @@ import {
   resumeUnfinished,
   kickPending,
 } from "./lib/rules";
-import { analyzeText } from "./lib/analyzer";
+import { extractProfile } from "./lib/analyzer";
+import { learnFromTextInBackground, getCraftStats } from "./lib/craft";
 import { uid, HttpError } from "./lib/constants";
 import type { Profile, FormatKey } from "./lib/types";
 import payments from "./lib/payments";
@@ -118,12 +119,25 @@ app.post(
       res.status(400).json({ error: "Hace falta más texto — pega un par de páginas." });
       return;
     }
-    const draft = analyzeText(text.slice(0, 16000));
+    const draft = await extractProfile(text.slice(0, 16000));
     if (draft.blocked) {
       res.status(422).json({ error: "Contenido no permitido." });
       return;
     }
+    // Aprendizaje de ESTRUCTURA (abstracto y anónimo): deriva señal de craft del
+    // texto permitido y la suma al agregado. No guarda el texto; corre en segundo
+    // plano para no demorar la respuesta de la lectora.
+    learnFromTextInBackground(text.slice(0, 16000));
     res.json({ draft });
+  })
+);
+
+// Vista de solo lectura del agregado de craft (números; sin texto ni obras).
+// Útil para verificar que lo aprendido es abstracto y anónimo.
+app.get(
+  "/api/craft-stats",
+  handler(async (_req, res) => {
+    res.json(await getCraftStats());
   })
 );
 
