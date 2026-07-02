@@ -116,6 +116,10 @@ const ES_TASK_REFUSAL: RegExp[] = [
   /\bno\s+(puedo|podré|voy a|debo|pienso|podría|me\s+es\s+posible)\b[^.\n]{0,40}\b(escenas?|contenido|im[aá]genes?|actos?)\b[^.\n]{0,24}\b(sexual\w*|expl[ií]cit\w*|er[oó]tic\w*|porn\w*|gr[aá]fic\w*|de\s+sexo)\b/i,
   /\bno\s+(es|sería|me\s+es)\s+(posible|apropiado|adecuado|ético)\s+(continuar|escribir|generar|crear|seguir|describir|mostrar|detallar|representar)\b/i,
   /\b(no puedo|me niego a)\s+cumplir\s+(con\s+)?(esta|tu|la)\s+(petición|solicitud)\b/i,
+  // "no puedo cumplir con los siguientes requerimientos/requisitos" (volcado de política)
+  /\bno\s+(puedo|podr[ée]|podría|pienso)\s+cumplir\s+con\s+(los\s+siguientes\s+)?(requerimientos|requisitos|peticiones|solicitudes)\b/i,
+  // lista de política (acción + objeto de menores/incesto): es un rechazo, nunca prosa
+  /\b(describir|generar|crear|enviar|compartir|fomentar|promover|justificar|escribir|producir)\b[^.\n]{0,40}\b(menores\s+de\s+edad|material\s+sexual\s+de\s+menores|explotaci[oó]n\s+de\s+menores|incesto)\b/i,
   // inability en otros tiempos ("no he podido generar", "no logré producir…")
   // acotada a objeto META (contenido/petición/…) para no marcar prosa.
   /\bno\s+(puedo|pude|podr[ée]|podría|he\s+podido|logr[éo]|consigo|fui\s+capaz|he\s+sido\s+capaz)\s+(de\s+)?(gener\w+|escrib\w+|produci\w+|redact\w+|crear|complet\w+|cumplir|proporcionar|continu\w+|ofrecer)\b[^.\n]{0,30}\b(contenido|petici[oó]n|solicitud|material|lo\s+que\s+(pides|solicitas|me\s+pides|me\s+solicitas))\b/i,
@@ -133,6 +137,10 @@ const ES_EDGE_REFUSAL: RegExp[] = [
   /^\s*no\s+(es|sería)\s+(apropiado|ético|adecuado)\b/im,
   /^\s*(nota|aviso|advertencia|descargo)\s*[:\-—]/im,
   /^\s*no\s+voy\s+a\s+(escribir|continuar|seguir|generar|crear|ayudar)\b/im,
+  // meta-acuse / asentimiento de chat en vez de prosa ("Sí, de acuerdo, puedo ayudarte a escribir ese capítulo")
+  /^\s*(s[íi]|claro|por supuesto|desde luego|de acuerdo|entendido|perfecto)[,.: ]+[^.\n]{0,45}\b(puedo|podr[ée]|te\s+ayudo|con\s+gusto|encantad[oa])\b[^.\n]{0,45}\b(ayudar(te)?|escrib\w+|redact\w+|crear|gener\w+|continu\w+)\b/im,
+  // preámbulo del modelo ("Aquí tienes el capítulo:")
+  /^\s*(aqu[ií]\s+(tienes|est[áa]|va)\s+(el|tu|la)\s+(cap[ií]tulo|escena|historia|continuaci[oó]n))/im,
 ];
 
 export function looksLikeRefusal(text: string): boolean {
