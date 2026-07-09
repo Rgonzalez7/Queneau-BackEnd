@@ -875,6 +875,29 @@ function stripMarkdown(raw: string): string {
 /* Quita la meta-narración: cuando el modelo narra el capítulo como objeto
    («El capítulo terminó con…», «Así concluye el capítulo», «Fin del capítulo»).
    Si el marco enmarca una acción, conserva la acción; si es puro meta, lo borra. */
+/* Quita un PREÁMBULO del asistente al inicio del capítulo (p. ej. "Lo siento,
+   pero parece que has proporcionado una guía… puedo intentar crear…"), que a
+   veces el modelo mete antes de la historia, normalmente seguido de "* * *".
+   Solo lo elimina si el bloque de arranque es claramente meta (habla de la
+   guía/premisa/contexto/tarea), nunca prosa narrativa legítima. */
+function stripPreamble(text: string): string {
+  const t = (text || "").replace(/^\s+/, "");
+  const META = /(lo siento|perd[oó]n|parece que|puedo (intentar|crear|ayudar|generar)|aqu[ií] (tienes|est[áa]|va)|te presento|a continuaci[oó]n|recuerda que|espero que|no has (incluido|proporcionado|dado)|no proporcionaste|no me (diste|has dado)|basado en (la premisa|el arco|lo que)|manteniendo el tono|como (asistente|modelo|ia|una ia)|no puedo (crear|continuar|proporcionar|generar)|este es un intento|seg[uú]n (la|tu) (gu[ií]a|premisa))/i;
+  const TASK = /(gu[ií]a|premisa|contexto|cap[ií]tulo anterior|personajes que|arco de|novela|escena inicial|instrucci[oó]n|visi[oó]n|has (descrito|esbozado|planeado))/i;
+
+  // Caso 1: hay un separador de escena temprano; si lo de ANTES es meta, se descarta con el separador.
+  const sepMatch = t.match(/^([\s\S]{0,1000}?)\n[ \t]*(?:\*\s*\*\s*\*|—\s*—\s*—|·\s*·\s*·|\.\s*\.\s*\.)[ \t]*\n/);
+  if (sepMatch && META.test(sepMatch[1]) && TASK.test(sepMatch[1])) {
+    return t.slice(sepMatch[0].length).trim();
+  }
+  // Caso 2: sin separador; si el PRIMER párrafo es claramente meta, se quita.
+  const paras = t.split(/\n{2,}/);
+  if (paras.length > 1 && META.test(paras[0]) && TASK.test(paras[0]) && paras[0].length < 800) {
+    return paras.slice(1).join("\n\n").trim();
+  }
+  return t;
+}
+
 function stripMetaNarration(text: string): string {
   const V = "(?:termin[óa]|concluy[óe]|cierra|cerró|comienz[ae]|comenzó|empiez[ae]|empezó|abre|abrió|inici[ae]|inició|finaliz[óa]|acab[óa])";
   const cap = (_m: string, pre: string, ch: string) => `${pre}${ch.toUpperCase()}`;
@@ -914,7 +937,7 @@ function cleanChapterText(raw: string): string {
       while (lines.length && !lines[0].trim()) lines.shift();
     }
   }
-  return stripMetaNarration(stripMarkdown(lines.join("\n")));
+  return stripMetaNarration(stripMarkdown(stripPreamble(lines.join("\n"))));
 }
 
 /** Construye una biblia con modelo (re-exporta buildBible para comodidad). */
