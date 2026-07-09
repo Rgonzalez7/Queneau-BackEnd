@@ -25,7 +25,7 @@ import {
 import { extractProfile } from "./lib/analyzer";
 import { learnFromTextInBackground, getCraftStats } from "./lib/craft";
 import { uid, HttpError } from "./lib/constants";
-import { STYLE_FACETS, sampleForStyle, sampleForScene, extractProse, extractSceneCraft, extractKnobs, generateStyleSample, extractTags, extractPlotArchitecture } from "./lib/styledna";
+import { STYLE_FACETS, sampleForStyle, sampleForScene, extractProse, extractSceneCraft, extractKnobs, generateStyleSample, extractTags, extractPlotArchitecture, extractCast } from "./lib/styledna";
 import { assessOutput } from "./lib/safety";
 import type { Profile, FormatKey } from "./lib/types";
 import payments from "./lib/payments";
@@ -520,6 +520,7 @@ async function runVoiceJob(job: VoiceJob, text: string) {
 
     set("plot", "running");
     const plot = await extractPlotArchitecture(sample);
+    const cast = await extractCast(sample); // perfil de elenco (para variar nº de personajes)
     set("plot", "done");
 
     set("sample", "running");
@@ -547,6 +548,7 @@ async function runVoiceJob(job: VoiceJob, text: string) {
         tags,
         plotBeats: plot.beats,
         tensionCurve: plot.tension,
+        cast,
         stats: { words: text.split(/\s+/).filter(Boolean).length },
       };
       if (!Array.isArray(db.voices)) db.voices = [];

@@ -6,7 +6,7 @@
 
 import { getProvider, getAnalysisProvider, looksLikeRefusal } from "./provider";
 import { extractMatchTags } from "./analyzer";
-import type { VoiceKnobs, VoiceProfile, BibleVoice, Profile, VoiceTags, PlotBeat } from "./types";
+import type { VoiceKnobs, VoiceProfile, BibleVoice, Profile, VoiceTags, PlotBeat, CastProfile } from "./types";
 
 export type StyleFacet = "structure" | "voice" | "sex" | "violence" | "action";
 export const STYLE_FACETS: StyleFacet[] = ["structure", "voice", "sex", "violence", "action"];
@@ -331,6 +331,7 @@ export function toBibleVoice(v: VoiceProfile): BibleVoice {
     styleSample: v.styleSample,
     lexicon: v.lexicon,
     plotBeats: v.plotBeats,
+    cast: v.cast,
   };
 }
 
@@ -449,5 +450,40 @@ export async function extractPlotArchitecture(sample: string): Promise<PlotArch>
     return { beats, tension };
   } catch {
     return { beats: [], tension: [] };
+  }
+}
+
+/* Extrae el PERFIL DE ELENCO del libro fuente: cuántos personajes con peso y qué
+   papeles secundarios recurren. Sirve para que la generación varíe el reparto en
+   vez de caer siempre en 2 protagonistas + 1 antagonista. */
+const CAST_SYSTEM =
+  "Analizas el REPARTO de una novela de romance oscuro. Devuelve SOLO JSON: " +
+  '{"size": number, "secondary": string[], "note": string}. ' +
+  "size = total de personajes con peso REAL en la trama (protagonistas + antagonista + secundarios relevantes; típico 3 a 6). " +
+  "secondary = papeles secundarios recurrentes, en español y en minúsculas (p. ej. \"mejor amiga\", \"hermano\", \"segundo interés\", \"mano derecha\", \"rival\", \"mentora\"). " +
+  "note = una frase breve sobre la estructura del elenco. Nada de texto fuera del JSON.";
+
+export async function extractCast(sample: string): Promise<CastProfile> {
+  try {
+    const { text } = await getAnalysisProvider().complete({
+      system: CAST_SYSTEM,
+      messages: [{ role: "user", content: sample }],
+      temperature: 0.3,
+      maxTokens: 300,
+    });
+    let s = (text || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+    if (!s || looksLikeRefusal(s)) return {};
+    const a = s.indexOf("{"); const b = s.lastIndexOf("}");
+    if (a >= 0 && b > a) s = s.slice(a, b + 1);
+    const o = JSON.parse(s) as { size?: unknown; secondary?: unknown; note?: unknown };
+    const sizeNum = Math.round(Number(o.size));
+    const size = Number.isFinite(sizeNum) && sizeNum >= 2 && sizeNum <= 12 ? sizeNum : undefined;
+    const secondary = Array.isArray(o.secondary)
+      ? o.secondary.map((x) => String(x).trim().toLowerCase()).filter(Boolean).slice(0, 6)
+      : [];
+    const note = typeof o.note === "string" ? o.note.trim().slice(0, 200) : "";
+    return { size, secondary, note };
+  } catch {
+    return {};
   }
 }

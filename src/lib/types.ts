@@ -107,6 +107,16 @@ export interface BibleVoice {
   styleSample?: string;                  // escena original en esa voz (few-shot)
   lexicon?: { sex: string[]; violence: string[]; action: string[] };
   plotBeats?: PlotBeat[];                // mapa de trama (patrón) para replicar la estructura
+  cast?: CastProfile;                    // perfil de elenco del libro fuente (para variar nº de personajes)
+}
+
+/* Perfil de ELENCO extraído del libro fuente: cuántos personajes centrales
+   maneja y qué papeles secundarios recurren, para que la generación no caiga
+   siempre en el mismo 2+1. */
+export interface CastProfile {
+  size?: number;         // total de personajes con peso real en la trama (típico 3-6)
+  secondary?: string[];  // arquetipos secundarios recurrentes (p. ej. "mejor amiga", "hermano", "rival", "segundo interés", "mano derecha")
+  note?: string;         // descripción breve de la estructura de elenco
 }
 
 /* Hito estructural de trama, posicionado por % del libro (PATRÓN abstracto,
@@ -216,6 +226,7 @@ export interface VoiceProfile {
   tags?: VoiceTags;         // etiquetas para el match con la categoría del usuario
   plotBeats?: PlotBeat[];   // mapa de trama: hitos estructurales por % del libro
   tensionCurve?: number[];  // curva de tensión (8-12 puntos, 0-100)
+  cast?: CastProfile;       // perfil de elenco del libro fuente
   stats?: { words?: number };
 }
 

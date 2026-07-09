@@ -1,7 +1,7 @@
 import type { DB, Story, FormatKey, Quota, PublicState, Profile } from "./types";
 import { FORMATS, FREE_QUOTA, OPENING_TTL_MS, uid, HttpError } from "./constants";
 import { withDB } from "./db";
-import { buildBible, SafetyError } from "./bible";
+import { buildBible, adjustCastToSize, SafetyError } from "./bible";
 import { pickVoice } from "./styledna";
 import { writeSynopsis, writeChapter, summarizeChapter, fallbackChapter, generateBookTitle } from "./generator";
 import { generateCover, coverEnabled } from "./cover";
@@ -99,7 +99,10 @@ export async function createOpening(
   // variar la sensación de autor. Las secuelas heredan la voz del predecesor.
   if (!predecessor && !bible.voice) {
     const v = pickVoice(db.voices, profile, storyId);
-    if (v) bible.voice = v;
+    if (v) {
+      bible.voice = v;
+      adjustCastToSize(bible, profile, v.cast?.size, storyId); // elenco según el ADN
+    }
   }
 
   // Apertura: solo sinopsis + capítulo 1 (el gancho gratis).
@@ -148,7 +151,10 @@ export async function purchaseOpening(db: DB, id: string): Promise<Story> {
   s.bibleSnapshot = s.bibleSnapshot ?? (await bibleFor(s.profileSnapshot, s.format, s.id));
   if (!s.bibleSnapshot.voice) {
     const v = pickVoice(db.voices, s.profileSnapshot, s.id);
-    if (v) s.bibleSnapshot.voice = v;
+    if (v) {
+      s.bibleSnapshot.voice = v;
+      adjustCastToSize(s.bibleSnapshot, s.profileSnapshot, v.cast?.size, s.id);
+    }
   }
 
   s.paid = true; // R3: comprada

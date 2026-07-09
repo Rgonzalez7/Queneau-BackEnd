@@ -358,6 +358,43 @@ function defaultTraits(role: CharacterRole, tone: string): string[] {
   }
 }
 
+/* Arquetipos SECUNDARIOS: dan variedad de elenco para que no todo sea 2+1.
+   El primer trait guarda el papel (lo usa el escritor de capítulos). */
+const SECONDARY_ARCHETYPES: { role: string; female: boolean; traits: string[] }[] = [
+  { role: "mejor amiga de la protagonista", female: true, traits: ["leal", "sin filtros", "protectora"] },
+  { role: "hermano mayor sobreprotector", female: false, traits: ["impulsivo", "feroz con los suyos"] },
+  { role: "segundo interés / rival amoroso", female: false, traits: ["encantador", "ambiguo", "tentador"] },
+  { role: "mano derecha del antagonista", female: false, traits: ["frío", "obediente", "letal"] },
+  { role: "mentora / figura materna", female: true, traits: ["astuta", "cansada del mundo"] },
+  { role: "rival de la protagonista", female: true, traits: ["venenosa", "calculadora"] },
+  { role: "confidente del interés", female: false, traits: ["cínico", "fiel"] },
+  { role: "hermana menor vulnerable", female: true, traits: ["ingenua", "en peligro"] },
+];
+
+/* Genera `count` personajes secundarios con nombres distintos a los ya usados. */
+function buildSecondaries(profile: Profile, rnd: () => number, count: number, used: Set<string>): BibleCharacter[] {
+  if (count <= 0) return [];
+  const f = flavorFor(profile);
+  const sur = SURNAME[f];
+  const pool = [...SECONDARY_ARCHETYPES];
+  const [lo, hi] = AGE_RANGE.secundario;
+  const out: BibleCharacter[] = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    const arch = pool.splice(Math.floor(rnd() * pool.length), 1)[0];
+    const namePool = arch.female ? FEMALE[f] : MALE[f];
+    let first = pickFrom(namePool, rnd);
+    for (let t = 0; used.has(first) && t < 8; t++) first = pickFrom(namePool, rnd);
+    used.add(first);
+    out.push({
+      role: "secundario",
+      name: `${first} ${pickFrom(sur, rnd)}`,
+      age: lo + Math.floor(rnd() * (hi - lo + 1)), // siempre >= 18
+      traits: [arch.role, ...arch.traits],
+    });
+  }
+  return out;
+}
+
 /* ------- pools para "Lo elige Queneau" (autopick): sembrados por libro ------- */
 const HEAT_POOL = ["cálido", "picante", "explícito", "explícito"]; // sesgo a explícito
 const DARKNESS_POOL = ["dark-light", "dark", "dark", "very-dark", ""];
@@ -485,6 +522,13 @@ export function deterministicBible(profile: Profile, format?: FormatKey, seedStr
       traits: defaultTraits(role, tone),
     };
   });
+
+  // Elenco VARIABLE (para que no todo sea el mismo 2+1): 0-2 secundarios sembrados
+  // por libro. Si hay una voz/ADN con perfil de elenco, createOpening lo reajusta
+  // luego con adjustCastToSize().
+  const usedNames = new Set(characters.map((c) => firstName(c.name)));
+  const extraCount = [0, 0, 1, 1, 2][Math.floor(rnd() * 5)];
+  characters.push(...buildSecondaries(profile, rnd, extraCount, usedNames));
 
   const genre = profile.genre || "romance";
   const v = variationFor(seed);
@@ -628,6 +672,21 @@ function buildPrompt(profile: Profile, n: number, base: StoryBible) {
 }
 
 /* --------------------------- buildBible (async) --------------------------- */
+/* Reajusta el nº de personajes SECUNDARIOS del elenco para acercarlo a `size`
+   (total). Lo usa createOpening cuando la voz/ADN trae un perfil de elenco: así
+   un libro cuyo ADN venía de un reparto amplio genera más personajes, y uno de
+   reparto mínimo se queda en 3. El núcleo (2 protagonistas + antagonista) no se toca. */
+export function adjustCastToSize(bible: StoryBible, profile: Profile, size: number | undefined, seedStr?: string): void {
+  if (!size || size < 3) return;
+  const core = bible.characters.filter((c) => c.role !== "secundario");
+  const currentSec = bible.characters.filter((c) => c.role === "secundario");
+  const want = Math.max(0, Math.min(size - core.length, 5)); // hasta 5 secundarios
+  if (want === currentSec.length) return;
+  const rnd = mulberry32((bibleSeed(profile, seedStr) ^ 0x9e3779b1) >>> 0);
+  const used = new Set(core.map((c) => firstName(c.name)));
+  bible.characters = [...core, ...buildSecondaries(profile, rnd, want, used)];
+}
+
 export async function buildBible(
   profile: Profile,
   opts?: { llm?: LLMProvider; format?: FormatKey; seed?: string }
