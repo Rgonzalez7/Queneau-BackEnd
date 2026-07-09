@@ -44,6 +44,26 @@ const SYN_ANGLES = [
   "Apóyate en la cacería: quién persigue y quién es la presa.",
 ];
 
+/* ESTRUCTURAS de contraportada (formas variadas, no una sola por POV). Se elige
+   una por libro con la semilla, para que la sinopsis cambie de forma cada vez
+   pero siga siendo un gancho de contraportada. Inspiradas en blurbs reales. */
+const SYN_STRUCT_SINGLE = [
+  "FORMA — Confesión rota: 7 a 10 líneas MUY cortas y fragmentadas en primera persona, desde la protagonista. Deseo y amenaza por sustracción (que se sientan sin nombrarlos). Sin encabezados.",
+  "FORMA — Lo que soporto / lo que no: enumera en líneas cortas varias cosas que ella SÍ puede soportar (las mentiras, las traiciones, las amenazas…), luego el quiebre en su propia línea («Lo que no puedo soportar es a él.»), y 3-4 líneas de por qué. Cierra con un giro que muerde.",
+  "FORMA — Misión en verbos: abre con una premisa simple en una línea; debajo 3 verbos en infinitivo, cada uno en su línea (p. ej. «Encontrarlo. / Capturarlo. / Entregarlo.»); luego un «Pero…» que lo derrumba todo, y 3-4 líneas de tensión y deseo.",
+  "FORMA — Reglas rotas: tres reglas cortas, cada una en su línea (no lo mires, no lo desees, no confíes en él), y revela que ya rompió la última. Remata con 3-4 líneas de consecuencias.",
+  "FORMA — Juramento roto: una línea de juramento o plan («Juré destruirlo.»); una línea de quiebre («Entonces dejó de ser tan simple.»); y 4-6 líneas de cómo el deseo cambió las reglas, en primera persona.",
+];
+const SYN_STRUCT_DUAL = [
+  "FORMA — Dos voces con epíteto: dos bloques. Cada bloque abre con un EPÍTETO en MAYÚSCULAS en su propia línea (apodo evocador, p. ej. «LA REINA DEL HIELO», «EL MONSTRUO») y debajo 4 a 7 líneas MUY cortas en primera persona desde esa mirada. Primero ella; una línea en blanco; luego él.",
+  "FORMA — Llamada y respuesta: dos bloques con epíteto en MAYÚSCULAS. La voz de él RESPONDE o contradice lo que dijo ella (que se sienta el duelo entre los dos). 4 a 6 líneas cortas cada bloque, una línea en blanco entre ambos.",
+  "FORMA — Ella confiesa / Él amenaza: dos bloques con epíteto en MAYÚSCULAS. El de ella respira deseo que teme; el de él, posesión y amenaza. 4 a 6 líneas cortas cada uno, primera persona, con una línea en blanco en medio.",
+];
+const SYN_STRUCT_THIRD = [
+  "FORMA — Contraportada en tercera persona: 6 a 9 líneas cortas en tercera persona, con EPÍTETOS en vez de nombres. Presenta a los dos y el choque inevitable entre ellos. Cierra con un anzuelo.",
+  "FORMA — Sentencia y giro: tercera persona. Una sentencia rotunda sobre ella; otra sobre él; una tercera que los enfrenta; y un cierre que insinúa que ninguno saldrá igual. Líneas cortas.",
+];
+
 /** Sinopsis con modelo (a partir de una biblia ya construida). */
 /* Título REAL del libro: corto (2-4 palabras), evocador, en clave dark, ligado a
    la trama. Se crea una sola vez al comprar. Devuelve "" si falla (el frontend
@@ -84,20 +104,10 @@ export async function writeSynopsis(
   const pov = (bible.pov || "").toLowerCase();
   const twoVoices = /dual|m[úu]ltiple/.test(pov);
   const third = /tercera/.test(pov);
-  let formatInstr: string;
-  if (twoVoices) {
-    formatInstr =
-      "FORMATO DOS VOCES: dos bloques. Cada bloque empieza con un EPÍTETO en MAYÚSCULAS en su propia línea " +
-      "(un apodo evocador para ese personaje, p. ej. «LA REINA DEL HIELO», «EL MONSTRUO», «EL VERDUGO»), y debajo " +
-      "de 4 a 7 líneas MUY cortas en primera persona desde su mirada. Primero la voz de ella; una línea en blanco; luego la de él.";
-  } else if (third) {
-    formatInstr =
-      "FORMATO TERCERA PERSONA: de 6 a 9 líneas cortas, tipo contraportada, en tercera persona. " +
-      "Nombra a cada protagonista con un epíteto evocador en vez de su nombre.";
-  } else {
-    formatInstr =
-      "FORMATO UNA VOZ: de 7 a 10 líneas MUY cortas y fragmentadas, en primera persona, desde la protagonista. Sin encabezados.";
-  }
+  // Estructura VARIADA (no una fija por POV): se elige del pool del POV con la
+  // semilla del libro, así cada libro trae una forma de contraportada distinta.
+  const structPool = twoVoices ? SYN_STRUCT_DUAL : third ? SYN_STRUCT_THIRD : SYN_STRUCT_SINGLE;
+  const formatInstr = structPool[Math.floor(imRng(`${bible.id || "q"}:synstruct`)() * structPool.length)];
 
   const angle = SYN_ANGLES[Math.floor(imRng(`${bible.id || "q"}:blurb`)() * SYN_ANGLES.length)];
 
@@ -124,7 +134,7 @@ export async function writeSynopsis(
     cont;
 
   try {
-    const { text } = await model.complete({ system, messages: [{ role: "user", content: user }], maxTokens: 360, temperature: 0.85 });
+    const { text } = await model.complete({ system, messages: [{ role: "user", content: user }], maxTokens: 360, temperature: 0.92 });
     const clean = stripMarkdown(text.trim());
     if (clean && !looksLikeRefusal(clean) && !looksLikeGarbage(clean) && assessOutput(clean).ok) return clean;
     logIncident("synopsis: salida insegura/rechazo/vacía, fallback");
