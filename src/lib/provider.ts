@@ -39,11 +39,13 @@ export interface LLMProvider {
 class ProviderError extends Error {
   transient: boolean;
   status?: number;
-  constructor(message: string, transient: boolean, status?: number) {
+  retryAfterMs?: number; // de la cabecera Retry-After (429), si el proveedor la manda
+  constructor(message: string, transient: boolean, status?: number, retryAfterMs?: number) {
     super(message);
     this.name = "ProviderError";
     this.transient = transient;
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -326,7 +328,15 @@ export class OpenAICompatProvider implements LLMProvider {
       console.warn(`[llm] x ${res.status}: ${detail.slice(0, 300)}`);
       // 429 y 5xx son transitorios (reintentables); el resto, no.
       const transient = res.status === 429 || res.status >= 500;
-      throw new ProviderError(`${res.status}: ${detail.slice(0, 200)}`, transient, res.status);
+      // Retry-After puede venir en segundos o como fecha HTTP.
+      let retryAfterMs: number | undefined;
+      const ra = res.headers.get("retry-after");
+      if (ra) {
+        const secs = Number(ra);
+        if (Number.isFinite(secs)) retryAfterMs = secs * 1000;
+        else { const when = Date.parse(ra); if (!Number.isNaN(when)) retryAfterMs = Math.max(0, when - Date.now()); }
+      }
+      throw new ProviderError(`${res.status}: ${detail.slice(0, 200)}`, transient, res.status, retryAfterMs);
     }
 
     const data = (await res.json()) as {
@@ -355,7 +365,8 @@ export class OpenAICompatProvider implements LLMProvider {
    siguiente. Solo lanza si TODOS fallan (entonces generator/bible aplican su
    propio fallback determinista como última red).
 --------------------------------------------------------------------------- */
-const MAX_RETRIES_PER_MODEL = 2; // reintentos extra ante fallos transitorios
+const MAX_RETRIES_PER_MODEL = 2; // reintentos extra ante fallos transitorios (red/5xx)
+const MAX_RETRIES_RATELIMIT = 4; // 429: más reintentos, con esperas más largas
 
 /** Lista de modelos de la cadena (mejor → piso). Configurable por entorno:
  *  - GENERATOR_MODELS = "modelA,modelB,modelC"  (lista explícita, gana sobre todo)
@@ -395,7 +406,7 @@ export class ChainProvider implements LLMProvider {
     for (let i = 0; i < this.links.length; i++) {
       const { model, provider } = this.links[i];
       if (this.dead.has(model)) continue; // modelo inexistente: no gastes una llamada
-      for (let attempt = 0; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
+      for (let attempt = 0; attempt <= MAX_RETRIES_RATELIMIT; attempt++) {
         try {
           const out = await provider.complete(input);
           const text = (out.text || "").trim();
@@ -416,8 +427,15 @@ export class ChainProvider implements LLMProvider {
             break;
           }
           const transient = err instanceof ProviderError && err.transient;
-          if (transient && attempt < MAX_RETRIES_PER_MODEL) {
-            await sleep(400 * Math.pow(2, attempt)); // backoff 400ms, 800ms
+          const isRate = err instanceof ProviderError && err.status === 429;
+          const maxForThis = isRate ? MAX_RETRIES_RATELIMIT : MAX_RETRIES_PER_MODEL;
+          if (transient && attempt < maxForThis) {
+            // 429: espera larga (respeta Retry-After si viene): ~1.5s, 3s, 6s, 12s.
+            // Otros transitorios (red/5xx): 400ms, 800ms.
+            const base = isRate ? 1500 : 400;
+            const wait = err.retryAfterMs && err.retryAfterMs > 0 ? err.retryAfterMs : base * Math.pow(2, attempt);
+            if (isRate) console.warn(`[chain] "${model}" rate-limited (429); reintento ${attempt + 1} en ${Math.round(Math.min(wait, 15000) / 1000)}s`);
+            await sleep(Math.min(wait, 15000)); // tope 15s por intento
             continue;
           }
           console.warn(`[chain] "${model}" falló (${lastMsg}); cayendo al siguiente`);
