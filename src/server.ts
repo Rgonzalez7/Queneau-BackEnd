@@ -543,8 +543,11 @@ async function runVoiceJob(job: VoiceJob, text: string) {
 
     set("plot", "running");
     const plot = await extractPlotArchitecture(sample);
-    const cast = await extractCast(sample); // perfil de elenco (para variar nº de personajes)
     set("plot", "done");
+
+    set("cast", "running");
+    const cast = await extractCast(sample); // perfil de elenco (para variar nº de personajes)
+    set("cast", "done");
 
     set("sample", "running");
     const styleSample = await generateStyleSample(acc.voice, knobs, imperatives);
