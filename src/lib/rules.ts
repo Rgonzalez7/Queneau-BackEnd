@@ -49,90 +49,83 @@ async function bibleFor(profile: Profile, format: FormatKey, seed?: string) {
 }
 
 export async function createOpening(
-  db: DB,
   profileId: string | null,
   format: FormatKey,
   opts: OpeningOpts = {},
   ownerId?: string
 ): Promise<Story> {
-  if (!FORMATS[format]) throw new HttpError(400, "Formato inválido");
-  const profile =
-    opts.profileSnapshot ||
-    db.profiles.find((p) => p.id === profileId && (!ownerId || p.ownerId === ownerId));
-  if (!profile) throw new HttpError(404, "Perfil no encontrado");
+  // ---- Fase 1: RESERVAR (rápido, bajo candado). NO se llama al modelo aquí;
+  // el candado global solo debe sostenerse durante load-modify-save, o el login
+  // de otros usuarios se cuela en la cola detrás de la generación (30-60s). ----
+  const prep = await withDB((db) => {
+    if (!FORMATS[format]) throw new HttpError(400, "Formato inválido");
+    const profile =
+      opts.profileSnapshot ||
+      db.profiles.find((p) => p.id === profileId && (!ownerId || p.ownerId === ownerId));
+    if (!profile) throw new HttpError(404, "Perfil no encontrado");
 
-  // R0: un solo libro generándose a la vez POR USUARIO. Si el usuario tiene un
-  // libro comprado todavía produciendo capítulos, no puede crear otra apertura.
-  if (isBusyGenerating(db, ownerId)) {
-    throw new HttpError(
-      409,
-      "Tu libro recién comprado se está generando. Espera a que termine para crear otro."
-    );
-  }
-
-  const paidExtra = !!opts.paidExtra;
-  if (!paidExtra) {
-    // R1: solo gratis si hay cuota (del usuario)
-    if (quotaState(db, ownerId).available <= 0) {
-      throw new HttpError(
-        402,
-        "Cuota de aperturas gratis agotada. Compra un libro, espera a que una caduque, o paga una apertura extra."
-      );
+    // R0: un solo libro comprado generándose a la vez por usuario.
+    if (isBusyGenerating(db, ownerId)) {
+      throw new HttpError(409, "Tu libro recién comprado se está generando. Espera a que termine para crear otro.");
     }
-  } else {
-    // TODO: confirmar pago real de la apertura extra antes de continuar
-  }
+    // R1: solo gratis si hay cuota (salvo apertura de pago).
+    if (!opts.paidExtra && quotaState(db, ownerId).available <= 0) {
+      throw new HttpError(402, "Cuota de aperturas gratis agotada. Compra un libro, espera a que una caduque, o paga una apertura extra.");
+    }
+    const predecessor = opts.predecessorId
+      ? db.stories.find((s) => s.id === opts.predecessorId) || null
+      : null;
+    return {
+      profile: JSON.parse(JSON.stringify(profile)) as Profile, // foto congelada del perfil
+      predecessorBible: predecessor?.bibleSnapshot ? JSON.parse(JSON.stringify(predecessor.bibleSnapshot)) : null,
+      predecessorId: predecessor ? predecessor.id : null,
+      voices: JSON.parse(JSON.stringify(db.voices || [])),
+      storyId: uid(), // id = semilla de la biblia (variedad por libro)
+    };
+  });
 
-  const predecessor = opts.predecessorId
-    ? db.stories.find((s) => s.id === opts.predecessorId) || null
-    : null;
+  const { profile, storyId } = prep;
+  const isSequel = !!prep.predecessorId;
 
-  // id único del libro. También es la SEMILLA de la biblia: así dos libros del
-  // MISMO perfil obtienen nombres y trama distintos (la variedad depende del seed).
-  const storyId = uid();
-
-  // Secuela: hereda la biblia congelada del predecesor (mismo mundo/personajes).
-  // Si no, se construye con el modelo (+ safety), sembrada con el id del libro.
-  const bible = predecessor?.bibleSnapshot ?? (await bibleFor(profile, format, storyId));
-
-  // Asigna una VOZ (ADN de estilo) a los libros nuevos, estable por semilla, para
-  // variar la sensación de autor. Las secuelas heredan la voz del predecesor.
-  if (!predecessor && !bible.voice) {
-    const v = pickVoice(db.voices, profile, storyId);
+  // ---- Fase 2: GENERAR (lento, SIN candado): biblia, sinopsis y capítulo 1. ----
+  const bible = prep.predecessorBible ?? (await bibleFor(profile, format, storyId));
+  if (!isSequel && !bible.voice) {
+    const v = pickVoice(prep.voices, profile, storyId);
     if (v) {
       bible.voice = v;
       adjustCastToSize(bible, profile, v.cast?.size, storyId); // elenco según el ADN
     }
   }
-
-  // Apertura: solo sinopsis + capítulo 1 (el gancho gratis).
-  const synopsis = await writeSynopsis(bible, format, predecessor);
+  const synopsis = await writeSynopsis(bible, format, isSequel ? ({ id: prep.predecessorId } as Story) : null);
   let ch1 = await writeChapter({ bible, index: 1, storySoFar: "" });
   if (!ch1) ch1 = await writeChapter({ bible, index: 1, storySoFar: "" }); // un reintento
   if (!ch1) ch1 = fallbackChapter(bible, 1); // último recurso coherente (nunca un stub)
 
-  const now = Date.now();
-  const origin = paidExtra ? "pagada_extra" : "gratis";
-
-  const story: Story = {
-    id: storyId,
-    ownerId,
-    profileSnapshot: JSON.parse(JSON.stringify(profile)), // FOTO CONGELADA
-    profileName: profile.name,
-    predecessorId: predecessor ? predecessor.id : null,
-    title: (predecessor ? "Secuela · " : "") + profile.name + " · " + FORMATS[format].label,
-    synopsis,
-    format,
-    bibleSnapshot: bible, // biblia CONGELADA
-    chapters: [ch1], // solo cap. 1 en la apertura
-    origin,
-    paid: false,
-    created: now,
-    expiresAt: origin === "gratis" ? now + OPENING_TTL_MS : null, // R2: solo las gratis caducan
-    status: "apertura",
-    finished: false,
-  };
-  db.stories.unshift(story);
+  // ---- Fase 3: INSERTAR (rápido, bajo candado). ----
+  const story = await withDB((db) => {
+    const now = Date.now();
+    const origin = opts.paidExtra ? "pagada_extra" : "gratis";
+    const st: Story = {
+      id: storyId,
+      ownerId,
+      profileSnapshot: profile, // FOTO CONGELADA
+      profileName: profile.name,
+      predecessorId: prep.predecessorId,
+      title: (isSequel ? "Secuela · " : "") + profile.name + " · " + FORMATS[format].label,
+      synopsis,
+      format,
+      bibleSnapshot: bible, // biblia CONGELADA
+      chapters: [ch1], // solo cap. 1 en la apertura
+      origin,
+      paid: false,
+      created: now,
+      expiresAt: origin === "gratis" ? now + OPENING_TTL_MS : null, // R2: solo las gratis caducan
+      status: "apertura",
+      finished: false,
+    };
+    db.stories.unshift(st);
+    return st;
+  });
   void generateCover(story.id); // portada IA en segundo plano
   return story;
 }

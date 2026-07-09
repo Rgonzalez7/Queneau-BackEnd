@@ -752,12 +752,9 @@ app.post(
   requireAuth,
   handler(async (req, res) => {
     const { profileId, format } = req.body as { profileId?: string; format?: FormatKey };
-    const out = await withDB(async (db) => {
-      const me = currentUser(db, req);
-      sweepExpired(db);
-      await createOpening(db, profileId ?? null, format as FormatKey, {}, me.id);
-      return publicState(db, me.id);
-    });
+    const meId = await withDB((db) => currentUser(db, req).id);
+    await createOpening(profileId ?? null, format as FormatKey, {}, meId); // genera FUERA del candado
+    const out = await withDB((db) => { sweepExpired(db); return publicState(db, meId); });
     res.json(out);
   })
 );
@@ -767,13 +764,10 @@ app.post(
   requireAuth,
   handler(async (req, res) => {
     const { profileId, format } = req.body as { profileId?: string; format?: FormatKey };
-    const out = await withDB(async (db) => {
-      const me = currentUser(db, req);
-      sweepExpired(db);
-      // TODO: confirmar pago de la apertura extra
-      await createOpening(db, profileId ?? null, format as FormatKey, { paidExtra: true }, me.id);
-      return publicState(db, me.id);
-    });
+    const meId = await withDB((db) => currentUser(db, req).id);
+    // TODO: confirmar pago de la apertura extra
+    await createOpening(profileId ?? null, format as FormatKey, { paidExtra: true }, meId);
+    const out = await withDB((db) => { sweepExpired(db); return publicState(db, meId); });
     res.json(out);
   })
 );
@@ -801,16 +795,17 @@ app.post(
   "/api/openings/:id/sequel",
   requireAuth,
   handler(async (req, res) => {
-    const out = await withDB(async (db) => {
+    const prep = await withDB((db) => {
       const me = currentUser(db, req);
       sweepExpired(db);
       const prev = ownStoryOr403(db, req.params.id, me);
-      await createOpening(db, null, prev.format, {
-        predecessorId: prev.id,
-        profileSnapshot: prev.profileSnapshot,
-      }, me.id);
-      return publicState(db, me.id);
+      return { meId: me.id, format: prev.format, snap: prev.profileSnapshot };
     });
+    await createOpening(null, prep.format, {
+      predecessorId: req.params.id,
+      profileSnapshot: prep.snap,
+    }, prep.meId);
+    const out = await withDB((db) => publicState(db, prep.meId));
     res.json(out);
   })
 );
