@@ -2,7 +2,8 @@ import type { DB, Story, FormatKey, Quota, PublicState, Profile } from "./types"
 import { FORMATS, FREE_QUOTA, OPENING_TTL_MS, uid, HttpError } from "./constants";
 import { withDB } from "./db";
 import { buildBible, SafetyError } from "./bible";
-import { writeSynopsis, writeChapter, summarizeChapter } from "./generator";
+import { pickVoice } from "./styledna";
+import { writeSynopsis, writeChapter, summarizeChapter, fallbackChapter, generateBookTitle } from "./generator";
 import { generateCover, coverEnabled } from "./cover";
 
 /* R2 — barrer aperturas gratis caducadas. Devuelve true si cambió algo. */
@@ -15,13 +16,19 @@ export function sweepExpired(db: DB): boolean {
   return before !== db.stories.length;
 }
 
-export function quotaState(db: DB): Quota {
-  const used = db.stories.filter((s) => s.origin === "gratis" && !s.paid).length;
+/* Selecciona las historias de un dueño (o todas si ownerId es undefined). */
+function ownedStories(db: DB, ownerId?: string): Story[] {
+  return ownerId ? db.stories.filter((s) => s.ownerId === ownerId) : db.stories;
+}
+
+export function quotaState(db: DB, ownerId?: string): Quota {
+  const mine = ownedStories(db, ownerId);
+  const used = mine.filter((s) => s.origin === "gratis" && !s.paid).length;
   return {
     used,
     total: FREE_QUOTA,
     available: Math.max(0, FREE_QUOTA - used),
-    hasPurchased: db.stories.some((s) => s.paid),
+    hasPurchased: mine.some((s) => s.paid),
   };
 }
 
@@ -45,16 +52,18 @@ export async function createOpening(
   db: DB,
   profileId: string | null,
   format: FormatKey,
-  opts: OpeningOpts = {}
+  opts: OpeningOpts = {},
+  ownerId?: string
 ): Promise<Story> {
   if (!FORMATS[format]) throw new HttpError(400, "Formato inválido");
-  const profile = opts.profileSnapshot || db.profiles.find((p) => p.id === profileId);
+  const profile =
+    opts.profileSnapshot ||
+    db.profiles.find((p) => p.id === profileId && (!ownerId || p.ownerId === ownerId));
   if (!profile) throw new HttpError(404, "Perfil no encontrado");
 
-  // R0: un solo libro generándose a la vez. Si hay un libro comprado todavía
-  // produciendo capítulos, no se puede crear otra apertura (evita saturar el
-  // modelo y que se corten las generaciones).
-  if (isBusyGenerating(db)) {
+  // R0: un solo libro generándose a la vez POR USUARIO. Si el usuario tiene un
+  // libro comprado todavía produciendo capítulos, no puede crear otra apertura.
+  if (isBusyGenerating(db, ownerId)) {
     throw new HttpError(
       409,
       "Tu libro recién comprado se está generando. Espera a que termine para crear otro."
@@ -63,8 +72,8 @@ export async function createOpening(
 
   const paidExtra = !!opts.paidExtra;
   if (!paidExtra) {
-    // R1: solo gratis si hay cuota
-    if (quotaState(db).available <= 0) {
+    // R1: solo gratis si hay cuota (del usuario)
+    if (quotaState(db, ownerId).available <= 0) {
       throw new HttpError(
         402,
         "Cuota de aperturas gratis agotada. Compra un libro, espera a que una caduque, o paga una apertura extra."
@@ -86,15 +95,25 @@ export async function createOpening(
   // Si no, se construye con el modelo (+ safety), sembrada con el id del libro.
   const bible = predecessor?.bibleSnapshot ?? (await bibleFor(profile, format, storyId));
 
+  // Asigna una VOZ (ADN de estilo) a los libros nuevos, estable por semilla, para
+  // variar la sensación de autor. Las secuelas heredan la voz del predecesor.
+  if (!predecessor && !bible.voice) {
+    const v = pickVoice(db.voices, profile, storyId);
+    if (v) bible.voice = v;
+  }
+
   // Apertura: solo sinopsis + capítulo 1 (el gancho gratis).
   const synopsis = await writeSynopsis(bible, format, predecessor);
-  const ch1 = await writeChapter({ bible, index: 1, storySoFar: "" });
+  let ch1 = await writeChapter({ bible, index: 1, storySoFar: "" });
+  if (!ch1) ch1 = await writeChapter({ bible, index: 1, storySoFar: "" }); // un reintento
+  if (!ch1) ch1 = fallbackChapter(bible, 1); // último recurso coherente (nunca un stub)
 
   const now = Date.now();
   const origin = paidExtra ? "pagada_extra" : "gratis";
 
   const story: Story = {
     id: storyId,
+    ownerId,
     profileSnapshot: JSON.parse(JSON.stringify(profile)), // FOTO CONGELADA
     profileName: profile.name,
     predecessorId: predecessor ? predecessor.id : null,
@@ -127,6 +146,10 @@ export async function purchaseOpening(db: DB, id: string): Promise<Story> {
   const total = FORMATS[s.format].chapters;
   // Biblia congelada; si es una historia antigua sin biblia, se construye una vez.
   s.bibleSnapshot = s.bibleSnapshot ?? (await bibleFor(s.profileSnapshot, s.format, s.id));
+  if (!s.bibleSnapshot.voice) {
+    const v = pickVoice(db.voices, s.profileSnapshot, s.id);
+    if (v) s.bibleSnapshot.voice = v;
+  }
 
   s.paid = true; // R3: comprada
   s.expiresAt = null; // lo pagado NUNCA caduca
@@ -156,10 +179,24 @@ export async function generateRemaining(storyId: string): Promise<void> {
         bible: s.bibleSnapshot,
         total: s.chaptersTotal ?? FORMATS[s.format].chapters,
         have: s.chapters.map((c) => c.b),
+        needTitle: !s.bookTitle,
+        opening: s.chapters[0]?.b || "",
       };
     });
     if (!init) return;
     const { bible, total } = init;
+
+    // Título real del libro (corto, dark), una sola vez, apenas comprado. El
+    // trabajo lento (modelo) va fuera del candado; solo el guardado es bajo withDB.
+    if (init.needTitle) {
+      const bookTitle = await generateBookTitle(bible, init.opening);
+      if (bookTitle) {
+        await withDB((db) => {
+          const s = db.stories.find((x) => x.id === storyId);
+          if (s && !s.bookTitle) s.bookTitle = bookTitle;
+        });
+      }
+    }
 
     // resumen corriente de lo ya escrito (continuidad)
     let storySoFar = "";
@@ -170,7 +207,12 @@ export async function generateRemaining(storyId: string): Promise<void> {
 
     // genera y guarda los que faltan
     for (let n = init.have.length + 1; n <= total; n++) {
-      const ch = await writeChapter({ bible, index: n, storySoFar }); // ya cae a determinista si falla
+      // writeChapter ya reintenta con espera internamente; aquí un reintento más
+      // por si un capítulo extremo agota la cadena, y como ÚLTIMO recurso un
+      // capítulo coherente (nunca el stub de desarrollador).
+      let ch = await writeChapter({ bible, index: n, storySoFar });
+      if (!ch) ch = await writeChapter({ bible, index: n, storySoFar });
+      if (!ch) ch = fallbackChapter(bible, n);
       await withDB((db) => {
         const s = db.stories.find((x) => x.id === storyId);
         if (s) s.chapters.push(ch);
@@ -219,8 +261,8 @@ export async function resumeUnfinished(): Promise<void> {
    withDB (db ya cargada y mutable). */
 /* ¿Hay algún libro comprado todavía generándose? (capítulos incompletos o
    marcado generating). Se usa para bloquear nuevas aperturas mientras tanto. */
-export function isBusyGenerating(db: DB): boolean {
-  return db.stories.some((s) => {
+export function isBusyGenerating(db: DB, ownerId?: string): boolean {
+  return ownedStories(db, ownerId).some((s) => {
     const total = s.chaptersTotal ?? FORMATS[s.format].chapters;
     return s.paid && (s.generating === true || s.chapters.length < total);
   });
@@ -248,14 +290,15 @@ export function setFinished(db: DB, id: string, finished: boolean): Story {
 }
 
 /* Estado público: aplica el muro (sin pagar, solo cap. 1). */
-export function publicState(db: DB): PublicState {
-  const q = quotaState(db);
+export function publicState(db: DB, ownerId?: string): PublicState {
+  const q = quotaState(db, ownerId);
+  const profiles = ownerId ? db.profiles.filter((p) => p.ownerId === ownerId) : db.profiles;
   return {
     brand: "Quenu",
     quota: q,
     formats: FORMATS,
-    profiles: db.profiles,
-    stories: db.stories.map((s) => {
+    profiles,
+    stories: ownedStories(db, ownerId).map((s) => {
       const total = s.chaptersTotal ?? FORMATS[s.format].chapters;
       return {
         id: s.id,
@@ -274,6 +317,10 @@ export function publicState(db: DB): PublicState {
         chaptersTotal: total,
         generating: !!s.generating,
         coverImage: s.coverImage ?? null,
+        bookTitle: s.bookTitle ?? null,
+        coverImageOrig: s.coverImageOrig ?? null,
+        coverImageAlt: s.coverImageAlt ?? null,
+        coverRegenerated: Boolean(s.coverRegenerated),
         coverPending: coverEnabled() && !s.coverImage,
         price: FORMATS[s.format].price,
         expiresInDays: s.expiresAt

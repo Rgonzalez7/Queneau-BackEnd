@@ -129,6 +129,7 @@ async function callModelOnce(model: string, messages: ChatMessage[], opts: GenOp
       throw new LlmError(`texto demasiado corto (${text.length} < ${opts.minChars})`, false);
     }
     if (looksLikeRefusal(text)) {
+      console.warn(`[llm] "${model}" marcado como RECHAZO. Inicio: ${JSON.stringify(text.slice(0, 200))}`);
       throw new LlmError("parece un rechazo del modelo", false);
     }
     return text;

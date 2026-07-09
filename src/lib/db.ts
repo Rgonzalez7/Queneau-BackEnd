@@ -23,6 +23,7 @@ import { uid } from "./constants";
 function initialDB(): DB {
   return {
     account: { id: "demo", created: Date.now() },
+    users: [],
     profiles: [
       {
         id: uid(),
@@ -83,6 +84,16 @@ function mongoColl(): Promise<MongoColl> {
 const DATA_DIR = path.join(process.cwd(), "data");
 const DATA_FILE = path.join(DATA_DIR, "db.json");
 
+/* Asegura campos nuevos en bases ya existentes (multiusuario). No asigna dueños:
+   los datos legados quedan sin ownerId hasta que el superusuario los reclama. */
+function normalize(db: DB): DB {
+  if (!Array.isArray(db.users)) db.users = [];
+  if (!Array.isArray(db.profiles)) db.profiles = [];
+  if (!Array.isArray(db.stories)) db.stories = [];
+  if (!Array.isArray(db.voices)) db.voices = [];
+  return db;
+}
+
 /* --------------------------- load / save --------------------------- */
 export async function loadDB(): Promise<DB> {
   if (useMongo) {
@@ -91,7 +102,7 @@ export async function loadDB(): Promise<DB> {
     if (doc) {
       const obj = doc as Record<string, unknown>;
       delete obj._id; // el _id es de Mongo, no parte de la db
-      return obj as unknown as DB;
+      return normalize(obj as unknown as DB);
     }
     const seed = initialDB();
     await saveDB(seed); // persistir la semilla para que los IDs sean estables
@@ -100,7 +111,7 @@ export async function loadDB(): Promise<DB> {
   // archivo JSON local
   try {
     const raw = await fs.readFile(DATA_FILE, "utf8");
-    return JSON.parse(raw) as DB;
+    return normalize(JSON.parse(raw) as DB);
   } catch {
     const db = initialDB();
     await saveDB(db);

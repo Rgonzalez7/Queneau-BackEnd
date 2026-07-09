@@ -100,6 +100,13 @@ const EN_REFUSAL: RegExp[] = [
   /\bagainst my (guidelines|programming|principles|policy|policies)\b/i,
   /\b(content|trigger) warning\b/i,
   /\bi can'?t (assist|help) with (that|this)\b/i,
+  // evasivas suaves en inglés (deflexiones de "AI/policy"); en tareas en español,
+  // que la salida venga en inglés con estas marcas es señal segura de rechazo.
+  /\bi'?m\s+(an?\s+)?ai\s+(model|assistant|language\s+model)\b/i,
+  /\b(community\s+guidelines|content\s+(policy|policies|guidelines|appropriateness)|audience\s+(sensitivity|appropriateness))\b/i,
+  /\bi'?d\s+like\s+to\s+(emphasize|note|clarify|remind)\b/i,
+  /\bi'?m\s+happy\s+to\s+help\b[^.\n]{0,80}\b(but|however|clarify|although)\b/i,
+  /\bi'?m\s+here\s+to\s+help\b/i,
 ];
 
 // (2) Negativa en español REFERIDA A LA TAREA — se busca en todo el texto.
@@ -115,7 +122,6 @@ const ES_TASK_REFUSAL: RegExp[] = [
   // "no puedo describir escenas de contenido sexual", "no puedo generar contenido explícito".
   /\bno\s+(puedo|podré|voy a|debo|pienso|podría|me\s+es\s+posible)\b[^.\n]{0,40}\b(escenas?|contenido|im[aá]genes?|actos?)\b[^.\n]{0,24}\b(sexual\w*|expl[ií]cit\w*|er[oó]tic\w*|porn\w*|gr[aá]fic\w*|de\s+sexo)\b/i,
   /\bno\s+(es|sería|me\s+es)\s+(posible|apropiado|adecuado|ético)\s+(continuar|escribir|generar|crear|seguir|describir|mostrar|detallar|representar)\b/i,
-  /\b(no puedo|me niego a)\s+cumplir\s+(con\s+)?(esta|tu|la)\s+(petición|solicitud)\b/i,
   // "no puedo cumplir con los siguientes requerimientos/requisitos" (volcado de política)
   /\bno\s+(puedo|podr[ée]|podría|pienso)\s+cumplir\s+con\s+(los\s+siguientes\s+)?(requerimientos|requisitos|peticiones|solicitudes)\b/i,
   // lista de política (acción + objeto de menores/incesto): es un rechazo, nunca prosa
@@ -126,12 +132,17 @@ const ES_TASK_REFUSAL: RegExp[] = [
   // frases de política/restricción de contenido (meta; no salen en prosa)
   /\b(restricciones|pol[ií]ticas|directrices|normas|l[ií]mites)\s+de\s+contenido\b/i,
   /\bnaturaleza\s+(oscura|expl[ií]cita|gr[aá]fica|sexual)\s+(de\s+(la|el|esta|este)\s+(trama|historia|narrativa|petici[oó]n|escena|solicitud)|del\s+contenido)\b/i,
-  // meta-acuse del prompt ("has proporcionado un resumen/directrices…")
-  /\b(has|me\s+has)\s+(proporcionado|dado|compartido|enviado|facilitado)\b[^.\n]{0,70}\b(resumen|directrices|instrucciones|indicaciones|petici[oó]n|descripci[oó]n)\b/i,
+  /\bla\s+respuesta\s+final\s+es\s*:?\s*no\s+puedo\b/i,
 ];
 
 // (3) Meta / negativa en español que solo cuentan al INICIO o FINAL del texto.
 const ES_EDGE_REFUSAL: RegExp[] = [
+  // meta-rechazos que solo cuentan si ABREN el texto (no en diálogo a mitad):
+  /^\s*no\s+(puedo|podr[ée]|podría|voy\s+a|pienso|me\s+niego\s+a)\s+cumplir\b[^.\n]{0,30}\b(petici[oó]n\w*|solicitud\w*|[oó]rden\w*|orden\w*|tarea\w*|requerimiento\w*|requisito\w*|instrucci\w*|indicaci\w*|con\s+lo\s+que|con\s+eso|con\s+esto|con\s+ello)/im,
+  /^\s*no\s+(puedo|podr[ée]|podría|voy\s+a|pienso)\s+ayudar(te|le)?\s+(con\s+(esa|esta|tu|la|dicha)\s+(solicitud|petici[oó]n|tarea|consigna)|a\s+(imitar|recrear|reproducir|copiar|emular|generar|escribir|crear|redactar|producir))/im,
+  // rechazo genérico corto: "No puedo ayudarte con eso/esto/ello", "No puedo ayudarte."
+  /^\s*no\s+(puedo|podr[ée]|podría|voy\s+a|pienso|s[ée]\s+c[oó]mo|estoy\s+dispuest[oa]\s+a)\s+ayudar(te|le)?\s+con\s+(eso|esto|ello|esa|esta|este|dicho|dicha|semejante|tal|ese|esa)\b/im,
+  /^\s*no\s+puedo\s+ayudar(te|le)?\s*[.!…]*\s*$/im,
   /^\s*(lo siento|disculpa|perdón|lamento),?\s+(pero\s+)?no\s+(puedo|podré|voy a|debo)\b/im,
   /^\s*(como|soy)\s+(una?\s+)?(ia|inteligencia artificial|modelo de lenguaje|asistente)\b/im,
   /^\s*no\s+(es|sería)\s+(apropiado|ético|adecuado)\b/im,
@@ -370,6 +381,7 @@ export function modelChain(): string[] {
 export class ChainProvider implements LLMProvider {
   readonly name = "chain";
   private links: { model: string; provider: OpenAICompatProvider }[];
+  private dead = new Set<string>(); // modelos con error permanente (404): se saltan
 
   constructor(models?: string[]) {
     const list = models ?? modelChain();
@@ -382,6 +394,7 @@ export class ChainProvider implements LLMProvider {
 
     for (let i = 0; i < this.links.length; i++) {
       const { model, provider } = this.links[i];
+      if (this.dead.has(model)) continue; // modelo inexistente: no gastes una llamada
       for (let attempt = 0; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
         try {
           const out = await provider.complete(input);
@@ -395,6 +408,13 @@ export class ChainProvider implements LLMProvider {
         } catch (e) {
           const err = e as ProviderError;
           lastMsg = err?.message || String(e);
+          // Error PERMANENTE (modelo inexistente / sin endpoints): marca muerto y
+          // no lo vuelvas a intentar en el resto del proceso.
+          if (/no endpoints found|\b404\b/i.test(lastMsg)) {
+            this.dead.add(model);
+            console.warn(`[chain] "${model}" no existe (404); se descarta para el resto de la sesión`);
+            break;
+          }
           const transient = err instanceof ProviderError && err.transient;
           if (transient && attempt < MAX_RETRIES_PER_MODEL) {
             await sleep(400 * Math.pow(2, attempt)); // backoff 400ms, 800ms
@@ -426,4 +446,31 @@ export function getProvider(): LLMProvider {
   _cached = useModel ? new ChainProvider() : new MockProvider();
   console.log(`[provider] activo: ${_cached.name}`);
   return _cached;
+}
+
+/* ------------------------- proveedor de ANÁLISIS -------------------------
+   El análisis de ADN necesita SEGUIR INSTRUCCIONES y devolver JSON, no escribir
+   ficción. Euryale (modelo de roleplay) ignora el prompt y roleplea/suelta
+   basura → se descarta y cae al débil Cydonia (encima con 429), por eso el
+   análisis era lento y el léxico salía suave. Aquí ponemos primero un modelo
+   instruible y dejamos la cadena de generación como respaldo.
+   Configurable con VOICE_ANALYSIS_MODEL (uno o varios, separados por coma). */
+export function analysisChain(): string[] {
+  const raw = (process.env.VOICE_ANALYSIS_MODEL ?? "").trim();
+  const custom = raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const base = custom.length ? custom : ["meta-llama/llama-3.3-70b-instruct"];
+  return [...new Set([...base, ...modelChain()])]; // instruible primero, generación como fallback
+}
+
+let _analysisCached: LLMProvider | null = null;
+export function getAnalysisProvider(): LLMProvider {
+  if (_analysisCached) return _analysisCached;
+  const forced = (process.env.GENERATOR_PROVIDER ?? "").toLowerCase();
+  let useModel: boolean;
+  if (forced === "openai") useModel = true;
+  else if (forced === "mock") useModel = false;
+  else useModel = !!process.env.GENERATOR_API_KEY;
+  _analysisCached = useModel ? new ChainProvider(analysisChain()) : new MockProvider();
+  console.log(`[provider] análisis activo: ${_analysisCached.name}`);
+  return _analysisCached;
 }

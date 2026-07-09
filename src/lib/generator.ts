@@ -14,7 +14,7 @@
 import type { Profile, Chapter, FormatKey, Story, StoryBible } from "./types";
 import { FORMATS } from "./constants";
 import { deterministicBible, buildBible } from "./bible";
-import { LLMProvider, getProvider, looksLikeRefusal, looksLikeGarbage } from "./provider";
+import { LLMProvider, getProvider, getAnalysisProvider, looksLikeRefusal, looksLikeGarbage } from "./provider";
 import { assessOutput, logIncident } from "./safety";
 
 /* ============================ RUTA SÍNCRONA ============================ */
@@ -45,6 +45,34 @@ const SYN_ANGLES = [
 ];
 
 /** Sinopsis con modelo (a partir de una biblia ya construida). */
+/* Título REAL del libro: corto (2-4 palabras), evocador, en clave dark, ligado a
+   la trama. Se crea una sola vez al comprar. Devuelve "" si falla (el frontend
+   cae al descriptor). */
+export async function generateBookTitle(bible: StoryBible, opening: string): Promise<string> {
+  try {
+    const chars = (bible.characters || []).map((c) => c.name).filter(Boolean).slice(0, 3).join(", ");
+    const { text } = await getAnalysisProvider().complete({
+      system:
+        "Eres titulador de novelas de ROMANCE OSCURO en español. Devuelve UN solo título: " +
+        "corto (2 a 4 palabras), evocador, en clave dark/posesivo/mafia, ligado a la trama. " +
+        "Sin subtítulo, sin comillas, sin punto final, sin el nombre del género ni del formato. " +
+        "Responde SOLO con el título.",
+      messages: [{ role: "user", content: `Premisa: ${bible.premise || "—"}\nPersonajes: ${chars || "—"}\nInicio del libro:\n${(opening || "").slice(0, 1600)}` }],
+      temperature: 0.9,
+      maxTokens: 24,
+    });
+    let t = (text || "").split("\n").map((l) => l.trim()).find(Boolean) || "";
+    t = t.replace(/^["'«»“”\s\-–—*]+|["'«»“”.\s\-–—*]+$/g, "").trim(); // quita comillas/puntuación de borde
+    if (/^t[íi]tulo\b[:\-]?/i.test(t)) t = t.replace(/^t[íi]tulo\b[:\-]?\s*/i, "").trim(); // por si antepone "Título:"
+    const words = t.split(/\s+/).filter(Boolean);
+    if (words.length > 5) t = words.slice(0, 5).join(" ");
+    if (t.length > 44) t = t.slice(0, 44).trim();
+    return t;
+  } catch {
+    return "";
+  }
+}
+
 export async function writeSynopsis(
   bible: StoryBible, format: FormatKey, predecessor: Story | null, llm?: LLMProvider
 ): Promise<string> {
@@ -251,9 +279,291 @@ function characterDirective(bible: StoryBible, index: number, total: number): st
   return `ARCO DEL PERSONAJE (mantén la grieta entre lo que dice ser y lo que hace bajo presión). ${base} ${phaseLine}${interest}\n`;
 }
 
+/* ---------------------- inyección de VOZ (fase 2) ------------------------ */
+function pickLexicon(bible: StoryBible, index: number): string[] {
+  const L = bible.voice?.lexicon;
+  if (!L) return [];
+  const explicit = /expl[ií]cit|picante/i.test(bible.heat || "");
+  const pool: string[] = [];
+  if (explicit) pool.push(...(L.sex || []), ...(L.sex || [])); // peso doble a lo íntimo si aplica
+  pool.push(...(L.violence || []), ...(L.action || []));
+  const uniq = [...new Set(pool.map((s) => s.trim()).filter(Boolean))];
+  if (uniq.length === 0) return [];
+  const r = imRng(`${bible.id || "q"}:lex:${index}`);
+  const shuffled = uniq.sort(() => r() - 0.5);
+  return shuffled.slice(0, explicit ? 12 : 8);
+}
+
+/* ¿El ADN pide un registro duro (crudo/explícito/oscuro)? */
+function hardRegister(bible: StoryBible): boolean {
+  const expl = (bible.voice?.knobs?.explicitness ?? 0) >= 4;
+  const dark = /very-dark|extreme-dark/i.test(bible.darkness || "");
+  const hot = /expl[ií]cit/i.test(bible.heat || "");
+  return expl || dark || hot;
+}
+
+/* Deriva "vainilla": cúmulo de diminutivos/cursilerías impropio de un ADN duro. */
+function looksTooSoft(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  const tender = (t.match(/\b(nena|mi amor|mi vida|mi cielo|cariño|amorcito|princesa|mi reina)\b/g) || []).length;
+  return tender >= 4;
+}
+
+function countWords(text: string): number {
+  return (text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+/* ¿El texto está narrado en PRIMERA persona? Cuenta marcadores de 1ª persona en
+   la NARRACIÓN (quitando el diálogo, donde "yo/me/mi" es legítimo en cualquier POV). */
+function isFirstPerson(text: string): boolean {
+  const narration = (text || "")
+    .replace(/—[^\n]*?(—|$)/gm, " ")   // quita segmentos de diálogo con raya
+    .replace(/[""«»][^""«»]*[""«»]/g, " "); // y entrecomillados
+  const words = countWords(narration) || 1;
+  const fp = (narration.match(/\b(yo|me|m[ií]|mis|m[ií][oa]s?|conmigo)\b/gi) || []).length;
+  return (fp / words) * 100 >= 1.0; // ≥1 marcador de 1ª persona por 100 palabras de narración
+}
+
+/* Persona objetivo del ADN: de las reglas ("primera/tercera persona") o, si no lo
+   dicen, inferida de la muestra de estilo. null = sin señal (no se fuerza). */
+function voicePerson(bible: StoryBible): "primera" | "tercera" | null {
+  const v = bible.voice;
+  if (!v) return null;
+  const imp = (v.imperatives || []).join(" · ").toLowerCase();
+  if (/\b(primera|1[ªa])\s*persona\b|narrador(a)?\s+protagonista/.test(imp)) return "primera";
+  if (/\b(tercera|3[ªa])\s*persona\b/.test(imp)) return "tercera";
+  if (v.styleSample) return isFirstPerson(v.styleSample) ? "primera" : "tercera";
+  return null;
+}
+
+/* Detecta un capítulo "resumen": demasiado corto, o un solo bloque de narración
+   que CUENTA los hechos en vez de mostrarlos como escena (poco diálogo, casi sin
+   párrafos). */
+function looksLikeSummary(text: string): boolean {
+  const words = countWords(text);
+  if (words < 350) return true; // anémico para el formato
+  const paras = (text || "").split(/\n{2,}|\n/).map((p) => p.trim()).filter(Boolean).length;
+  const dashes = (text || "").match(/[—–]\s|(^|\n)\s*[-–—]\s/g)?.length || 0;
+  if (paras <= 2 && dashes < 2 && words < 700) return true; // un bloque de "telling"
+  return false;
+}
+
+function voiceDirective(bible: StoryBible, index: number): { top: string; sample: string } {
+  const v = bible.voice;
+  if (!v) return { top: "", sample: "" };
+  const lines: string[] = [];
+  if (v.imperatives && v.imperatives.length) {
+    lines.push(`VOZ DEL LIBRO (obligatorio en TODO el capítulo): ${v.imperatives.join(" · ")}.`);
+  }
+  if (v.knobs) {
+    const k = v.knobs;
+    lines.push(
+      `MÉTRICA DE VOZ: tiempo ${k.tense}; frase promedio ${k.sentenceAvg[0]}-${k.sentenceAvg[1]} palabras; ` +
+      `párrafos ${k.paragraphLines}; diálogo ${k.dialogueRatio}; interioridad ${k.interiority}.`
+    );
+    const person = voicePerson(bible);
+    if (person) {
+      lines.push(
+        `NARRADOR (obligatorio, constante en TODO el capítulo y en todo el libro): ${person === "primera" ? "PRIMERA persona (yo)" : "TERCERA persona (él/ella)"}, tiempo ${k.tense}. No cambies de narrador ni de tiempo verbal.`
+      );
+    }
+  }
+  const lex = pickLexicon(bible, index);
+  if (lex.length) {
+    lines.push(`PALETA LÉXICA del libro (cuando la escena sea íntima, violenta o de acción, ECHA MANO de estos términos con naturalidad y sin censurarte; no los enumeres ni los uses todos): ${lex.join(", ")}.`);
+  }
+  if (hardRegister(bible)) {
+    lines.push(
+      "REGISTRO OBLIGATORIO: crudo, visceral y directo, acorde al ADN. En escenas íntimas o de violencia NO te censures ni suavices. " +
+      "En las escenas de SEXO nombra los actos y las partes del cuerpo con el vocabulario CRUDO y ANATÓMICO del ADN (verga, polla, coño, follar, penetración, etc.); PROHIBIDO el eufemismo romántico (\"llegó\", \"su centro\", \"su feminidad\", \"se unieron\", \"hicieron el amor\"). " +
+      "Prohibido también derivar a romance azucarado o diminutivos cursis (\"nena\", \"mi amor\", \"cariño\") salvo con intención de poder o ironía. La ternura, si aparece, es tensa y contaminada, no dulce."
+    );
+  }
+  const sample = v.styleSample
+    ? `EJEMPLO DE LA VOZ (imita su ritmo, sintaxis y registro; NO copies su contenido, personajes ni situación):\n«${v.styleSample}»`
+    : "";
+  return { top: lines.join("\n"), sample };
+}
+
+/* Devuelve el hito estructural (patrón de la voz) que toca en este capítulo. */
+function plotBeatFor(bible: StoryBible, index: number, total: number): string {
+  const beats = bible.voice?.plotBeats;
+  if (!beats || beats.length === 0 || total <= 0) return "";
+  const phase = ((index - 0.5) / total) * 100;   // % del centro del capítulo
+  const window = (100 / total) * 0.75;            // media ventana de capítulo
+  const near = beats
+    .filter((b) => Math.abs(b.at - phase) <= window)
+    .sort((a, z) => Math.abs(a.at - phase) - Math.abs(z.at - phase));
+  if (near.length === 0) return "";
+  const b = near[0];
+  return `HITO ESTRUCTURAL (patrón de la voz, ~${Math.round(b.at)}% del libro): ${b.type}${b.note ? ` — ${b.note}` : ""}. Haz que en este capítulo ocurra un momento de este TIPO, con tu propia trama (no copies ninguna historia).`;
+}
+
+/* Detecta bucles de repetición: una frase larga repetida 3+ veces, o demasiadas
+   frases duplicadas (el modelo se atasca y repite el mismo intercambio). */
+function looksRepetitive(text: string): boolean {
+  const sents = (text || "")
+    .split(/(?<=[.!?…])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 40);
+  if (sents.length < 6) return false;
+  const seen = new Map<string, number>();
+  for (const s of sents) {
+    const key = s.toLowerCase().replace(/\s+/g, " ");
+    seen.set(key, (seen.get(key) || 0) + 1);
+  }
+  let maxDup = 0;
+  let dupExtra = 0;
+  for (const c of seen.values()) { if (c > maxDup) maxDup = c; dupExtra += c - 1; }
+  if (maxDup >= 3) return true;                 // misma frase larga 3+ veces = loop
+  if (dupExtra / sents.length > 0.18) return true; // muchas frases repetidas
+  return false;
+}
+
+/* Detecta "fuga de planificación": el modelo DESCRIBE lo que ocurrirá en vez de
+   escribir la escena (resumen en futuro, meta-referencias al capítulo). */
+const PLANNING_MARKERS: RegExp[] = [
+  /\ben (la|una) escena (íntima|de sexo|del cap)/i,
+  /\ben este cap[íi]tulo\b/i,
+  /\bla escena se (desarrollar[áa]|desarrolla|inicia)\b/i,
+  /\b(la pareja|los personajes|los protagonistas)\s+\w*\s*(tendr[áa]n?|se perder[áa]n?|comenzar[áa]n?|sentir[áa]n?)\b/i,
+  /\bdel cap[íi]tulo \d+\b/i,
+  /\ba medida que se acelera el ritmo\b/i,
+  /\bdespués de su encuentro\b/i,
+];
+function looksLikePlanning(text: string): boolean {
+  const t = text || "";
+  if (PLANNING_MARKERS.some((re) => re.test(t))) return true;
+  // densidad alta de verbos en futuro (poco propios de narración en pasado) sin
+  // apenas diálogo => probable resumen/planificación, no prosa narrativa.
+  const future = (t.match(/\b\w+rá(n)?\b/gi) || []).length;
+  const dashes = (t.match(/[—–]\s|(^|\n)\s*[-–—]\s/g) || []).length;
+  if (future >= 6 && dashes < 3) return true;
+  return false;
+}
+
+/* Mide la longitud media de frase (para validar contra las perillas). */
+function avgSentenceWords(text: string): number {
+  const parts = (text || "").split(/[.!?…]+/).map((s) => s.trim()).filter((s) => s.split(/\s+/).length > 1);
+  if (parts.length === 0) return 0;
+  const words = parts.reduce((a, s) => a + s.split(/\s+/).length, 0);
+  return words / parts.length;
+}
+
+/* ----------------------- anti-repetición inter-capítulo y entre libros -----
+   Dos males distintos:
+   (1) muletillas del MODELO que reaparecen en escenas parecidas de CADA libro
+       ("sin previo aviso", "no hubo advertencia"…): lista fija, prohibida
+       siempre y detectada para reintentar.
+   (2) frases reutilizadas ENTRE capítulos del mismo libro: se extraen n-gramas
+       distintivos ya usados y se prohíben en el siguiente capítulo.
+--------------------------------------------------------------------------- */
+const NARRATIVE_CRUTCHES = [
+  "no hubo advertencia", "sin advertencia", "sin previo aviso", "sin aviso previo", "sin aviso",
+  "sin mediar palabra", "sin darme tiempo", "de la nada", "sin más",
+  "un escalofrío le recorrió", "un escalofrío recorrió", "una corriente le recorrió",
+  "se le heló la sangre", "el corazón le dio un vuelco", "el tiempo se detuvo",
+  "contuvo el aliento", "se le cortó la respiración",
+  "una sonrisa que no llegó a sus ojos", "sus ojos se oscurecieron",
+  // familia cardíaca (cliché fisiológico que se repite entre libros)
+  "le martilleaba", "me martilleaba", "el corazón le latía con fuerza",
+  "el corazón me latía con fuerza", "latía con fuerza contra", "el pulso se le disparó",
+  "el pulso se me disparó", "el corazón se le aceleró", "el corazón se me aceleró",
+  "contra mis costillas", "contra sus costillas", "contra las costillas", "martilleaba el pecho",
+];
+const deAccent = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+function crutchHits(text: string): string[] {
+  const low = " " + deAccent(text).replace(/\s+/g, " ") + " ";
+  return NARRATIVE_CRUTCHES.filter((c) => low.includes(deAccent(c)));
+}
+const NGRAM_STOP = new Set(
+  "que de la el los las un una y o a en con por para su sus se le les lo mi me te tu del al como mas pero no si ya muy es era son fue habia he ha su esta este eso esa ese".split(" ")
+);
+function shingles(text: string, n: number): Set<string> {
+  const w = deAccent(text).match(/[a-z0-9]+/g) || [];
+  const out = new Set<string>();
+  for (let i = 0; i + n <= w.length; i++) {
+    const g = w.slice(i, i + n);
+    if (g.filter((x) => !NGRAM_STOP.has(x)).length >= 2) out.add(g.join(" ")); // ≥2 palabras de contenido = distintivo
+  }
+  return out;
+}
+/* n-gramas distintivos de `text` que YA aparecían en `prev` (capítulos previos). */
+function reusedNgrams(text: string, prev: string, n = 5, cap = 12): string[] {
+  if (!prev || !prev.trim()) return [];
+  const prevSet = shingles(prev, n);
+  if (prevSet.size === 0) return [];
+  const hits: string[] = [];
+  for (const g of shingles(text, n)) {
+    if (prevSet.has(g)) { hits.push(g); if (hits.length >= cap) break; }
+  }
+  return hits;
+}
+
+/* Muletilla de ANTÍTESIS NEGATIVA: "no era X, sino Y" / "no era X, era Y" /
+   "no ... sino que". El modelo la sobreusa en cada libro; es un patrón sintáctico
+   (no una frase fija), así que se detecta por regex, no por la lista de frases. */
+const ANTITHESIS_PATTERNS: RegExp[] = [
+  /\bno\s+(era|eran|fue|fueron|es|son|se\s+trataba\s+de|habia|tenia|se\s+sentia|parecia)\b[^.;!?\n]{1,80}?\bsino\b/gi,
+  /\bno\s+(era|eran|fue|fueron)\b[^.;!?\n]{1,60}?[,.]\s*(era|eran|fue|fueron)\b/gi,
+  /\bno\s+[a-z]+\b[^.;!?\n]{1,50}?\bsino\s+que\b/gi,
+];
+function antithesisHits(text: string): number {
+  const low = deAccent(text);
+  let n = 0;
+  for (const re of ANTITHESIS_PATTERNS) n += (low.match(re) || []).length;
+  return n;
+}
+
+/* ------------------- registro léxico: ESPAÑOL LATINO -------------------
+   Preferencias de vocabulario. Se piden en el prompt Y se aplican como pasada
+   determinista al final (garantía por si el modelo se resiste).
+   EDITABLE: cambia el término de la derecha por el de tu país. */
+const LATIN_LEXICON: Array<[string, string]> = [
+  // sustantivos
+  ["pollas", "vergas"], ["polla", "verga"],
+  // (coño se trata aparte: interjección -> mierda; anatómico -> término neutro)
+  // verbo follar -> coger (formas frecuentes; de la más larga a la más corta)
+  ["follándome", "cogiéndome"], ["follándote", "cogiéndote"], ["follándola", "cogiéndola"], ["follándolo", "cogiéndolo"],
+  ["follármela", "cogérmela"], ["follártela", "cogértela"],
+  ["follarme", "cogerme"], ["follarte", "cogerte"], ["follarla", "cogerla"], ["follarlo", "cogerlo"], ["follarnos", "cogernos"],
+  ["follando", "cogiendo"], ["follados", "cogidos"], ["folladas", "cogidas"], ["follada", "cogida"], ["follado", "cogido"],
+  ["follaron", "cogieron"], ["follaste", "cogiste"], ["follábamos", "cogíamos"], ["follaban", "cogían"], ["follabas", "cogías"], ["follaba", "cogía"],
+  ["follamos", "cogemos"], ["folláis", "cogen"], ["follan", "cogen"], ["follas", "coges"], ["follo", "cojo"],
+  ["follé", "cogí"], ["folló", "cogió"],
+  ["follemos", "cojamos"], ["follen", "cojan"], ["folles", "cojas"], ["folle", "coja"],
+  ["follar", "coger"], ["folla", "coge"],
+];
+const LATIN_RES: Array<{ re: RegExp; to: string }> = LATIN_LEXICON.map(([from, to]) => ({
+  re: new RegExp(`(?<![a-z0-9áéíóúñü])${from}(?![a-z0-9áéíóúñü])`, "gi"),
+  to,
+}));
+function applyCase(sample: string, repl: string): string {
+  if (sample.length > 1 && sample === sample.toUpperCase() && sample !== sample.toLowerCase()) return repl.toUpperCase();
+  if (sample.charAt(0) === sample.charAt(0).toUpperCase()) return repl.charAt(0).toUpperCase() + repl.slice(1);
+  return repl;
+}
+/* Aplica el registro latino al texto final del capítulo. */
+function latinize(text: string): string {
+  let out = text;
+  for (const { re, to } of LATIN_RES) out = out.replace(re, (m) => applyCase(m, to));
+  // Interjección "joder"/"coño" -> "mierda". Solo cuando abre la exclamación
+  // (¡…!, —… en diálogo, o inicio de línea) y va seguida de puntuación/fin, para
+  // NO tocar el verbo ("me vas a joder la vida") ni el uso anatómico ("en su coño.").
+  out = out.replace(
+    /(^|[\n—¡«"(])(joder|coños?)(?=[.,;:!?…»")—]|$)/gim,
+    (_m, pre, w) => pre + applyCase(w, "mierda")
+  );
+  // "coño"/"coños" ANATÓMICO restante -> término neutro (no un sinónimo vulgar).
+  // "sexo" encaja en casi cualquier contexto y respeta el género ("su sexo húmedo").
+  out = out.replace(/(?<![a-z0-9áéíóúñü])coños(?![a-z0-9áéíóúñü])/gi, (m) => applyCase(m, "sexos"));
+  out = out.replace(/(?<![a-z0-9áéíóúñü])coño(?![a-z0-9áéíóúñü])/gi, (m) => applyCase(m, "sexo"));
+  return out;
+}
+
 export async function writeChapter(args: {
   bible: StoryBible; index: number; storySoFar?: string; llm?: LLMProvider;
-}): Promise<Chapter> {
+}): Promise<Chapter | null> {
   const { bible, index } = args;
   const model = args.llm ?? getProvider();
   const total = bible.arc.length;
@@ -329,9 +639,16 @@ export async function writeChapter(args: {
     "NUNCA narres el capítulo ni la historia como objeto: prohibido «el capítulo termina/empieza con…», «en esta escena», «en este capítulo» o cualquier comentario sobre la narración; cuenta los hechos directamente. " +
     "PROSA POR SUSTRACCIÓN (muestra, no expliques): no nombres la emoción ni uses verbos filtro (sintió, pensó, supo, notó, se dio cuenta) ni adjetivos abstractos de emoción (tristeza, miedo, rabia); ancla la emoción en el cuerpo (manos, respiración, mirada, garganta) y en el entorno y los objetos. El ritmo de las frases ES la emoción: frases cortas y entrecortadas para la tensión y el miedo; frases largas y fluidas para la melancolía o el deseo. " +
     (bible.atmosphere ? `ATMÓSFERA DEL GÉNERO (cúmplela en cada escena): ${bible.atmosphere} ` : "") +
+    `FRASES HECHAS PROHIBIDAS (las repites demasiado entre escenas y libros; no uses ninguna ni una variante cercana, di lo mismo de otra forma): ${NARRATIVE_CRUTCHES.map((c) => `«${c}»`).join("; ")}. ` +
+    `EVITA LA MULETILLA DE ANTÍTESIS: no abuses de "no era X, sino Y" ni "no era X, era Y". Úsala como MUCHO una vez en todo el capítulo; el resto del tiempo afirma directamente lo que ocurre. ` +
+    `REGISTRO LÉXICO (español LATINO): usa «verga» (no «polla») y «coger» (no «follar»). Para la anatomía femenina usa términos anatómicos o descriptivos según la escena (clítoris, labios, entrada, sexo) en vez de «coño» o sinónimos vulgares como «concha». «Coño» y «joder» como exclamación se dicen «mierda». Prefiere el vocabulario sexual latinoamericano en todo el libro. ` +
     heatDirective(bible.heat);
 
-  const user =
+  const vd = voiceDirective(bible, index);
+  const plotLine = plotBeatFor(bible, index, total);
+
+  const baseUser =
+    (vd.top ? `${vd.top}\n\n` : "") +
     `BIBLIA (fija):\n- Premisa: ${bible.premise}\n- Ambientación: ${bible.setting}\n` +
     `- Tono: ${bible.tone} · Calor: ${bible.heat}\n` +
     (bible.archetype ? `- Arquetipo del interés: ${bible.archetype}\n` : "") +
@@ -345,24 +662,171 @@ export async function writeChapter(args: {
     (sceneDirective ? `${sceneDirective}\n` : "") +
     (intimacyDirective ? `${intimacyDirective}\n` : "") +
     (characterDir ? `${characterDir}\n` : "") +
+    (plotLine ? `${plotLine}\n` : "") +
+    (vd.sample ? `${vd.sample}\n\n` : "");
+
+  const tail =
     `Escribe el CAPÍTULO ${index} de ${total}. Objetivo exclusivo de este capítulo: ${beat}. ` +
-    `Empieza justo donde terminó el capítulo anterior y avanza la trama. ` +
+    `Empieza justo donde terminó el capítulo anterior y AVANZA la trama con hechos NUEVOS. ` +
+    `NO repitas revelaciones, confesiones ni giros que ya ocurrieron en "LO OCURRIDO HASTA AHORA": dalos por sabidos y sigue adelante. ` +
+    `Escríbelo como ESCENA completa (acción y diálogo momento a momento), no como resumen. ` +
     `Cierra el capítulo con una frase completa; no lo dejes a medias.`;
 
-  try {
+  const gen = async (extra: string): Promise<string | null> => {
     const { text } = await model.complete({
       system,
-      messages: [{ role: "user", content: user }],
+      messages: [{ role: "user", content: baseUser + (extra ? extra + "\n" : "") + tail }],
       maxTokens: 2200,
       temperature: 0.8,
     });
     const body = cleanChapterText(trimToLastSentence(text.trim()));
-    if (body && !looksLikeRefusal(body) && !looksLikeGarbage(body) && assessOutput(body).ok) return { t: chapterTitle(index, beat), b: body };
-    logIncident("chapter: salida insegura/rechazo/vacía, fallback determinista");
-  } catch {
-    logIncident("chapter: modelo falló, fallback determinista");
+    if (body && countWords(body) >= 40 && !looksLikeRefusal(body) && !looksLikeGarbage(body) && assessOutput(body).ok) return body;
+    return null;
+  };
+
+  const REPAIR =
+    "IMPORTANTE: escribe la ESCENA en prosa narrativa real, mostrando la acción y el diálogo tal como ocurren. " +
+    "NO resumas ni anticipes lo que pasará (nada de \"la escena se desarrollará\", \"la pareja tendrá\", ni referencias a \"este capítulo\"). " +
+    "NO repitas frases ni intercambios de diálogo: cada línea debe avanzar la historia.";
+
+  // acepta un candidato solo si no es rechazo/basura/insegura, ni bucle, ni planificación
+  const tryOne = async (extra: string): Promise<string | null> => {
+    const cand = await gen(extra);
+    if (!cand) return null;
+    if (looksLikePlanning(cand)) { logIncident("chapter: fuga de planificación, reintento"); return null; }
+    if (looksRepetitive(cand)) { logIncident("chapter: repetición en bucle, reintento"); return null; }
+    return cand;
+  };
+
+  // Un intento completo: sub-intentos + pasos de calidad (registro, anti-resumen,
+  // métrica). Devuelve el cuerpo o null.
+  const oneRound = async (): Promise<string | null> => {
+    let body: string | null = null;
+    for (let attempt = 0; attempt < 3 && !body; attempt++) {
+      body = await tryOne(attempt === 0 ? "" : REPAIR);
+    }
+    if (!body) return null;
+
+    // Paso de REGISTRO: si el ADN es duro/explícito pero derivó a romance
+    // azucarado, intenta UNA vez endurecerlo. Conserva el original si no mejora.
+    if (hardRegister(bible) && looksTooSoft(body)) {
+      logIncident("chapter: deriva a registro tierno, reintento de registro");
+      const harder = await tryOne(
+        "AJUSTE DE REGISTRO: este libro es oscuro/explícito. Endurece el registro: crudo, visceral, sin romance azucarado ni diminutivos cursis (\"nena\", \"mi amor\", \"cariño\"). En la intimidad y la violencia usa vocabulario directo y anatómico. " + REPAIR
+      );
+      if (harder && !looksTooSoft(harder)) body = harder;
+    }
+
+    // Paso ANTI-RESUMEN / ANTI-ANÉMICO: si salió flaco (resumen) o demasiado
+    // corto (< ~450 palabras), intenta hasta 2 veces una escena más desarrollada.
+    // Conserva siempre la versión más larga.
+    if (looksLikeSummary(body) || countWords(body) < 450) {
+      for (let a = 0; a < 2 && countWords(body) < 550; a++) {
+        logIncident(`chapter: capítulo resumen/anémico (${countWords(body)} palabras), reintento ${a + 1} de escena completa`);
+        const fuller = await tryOne(
+          "DESARROLLA MÁS: escribe una ESCENA COMPLETA, no un resumen ni un capítulo anémico. Apunta a unas 700-900 palabras. Muestra la acción y el diálogo momento a momento, en varios párrafos, con espacio para el cuerpo, el entorno y la tensión. No narres de lejos ni comprimas los hechos. " + REPAIR
+        );
+        if (fuller && countWords(fuller) > countWords(body)) body = fuller;
+      }
+    }
+
+    // Paso POV: si el ADN define una persona narrativa y el capítulo salió en la
+    // equivocada (p. ej. tercera cuando el libro es en primera), reintenta. Solo
+    // cambia el cuerpo si el reintento SÍ queda en la persona correcta.
+    const person = voicePerson(bible);
+    if (person && isFirstPerson(body) !== (person === "primera")) {
+      logIncident(`chapter: POV incorrecto (se esperaba ${person} persona), reintento`);
+      const tense = bible.voice?.knobs?.tense ? `, en tiempo ${bible.voice.knobs.tense}` : "";
+      const fixed = await tryOne(
+        `AJUSTE DE NARRADOR: escribe TODO el capítulo en ${person === "primera" ? "PRIMERA persona (yo)" : "TERCERA persona (él/ella)"}${tense}, como el resto del libro. No cambies de narrador a mitad. ` + REPAIR
+      );
+      if (fixed && isFirstPerson(fixed) === (person === "primera")) body = fixed;
+    }
+
+    // Validación de perillas: si la longitud media de frase se desvía mucho del
+    // objetivo, reintenta una vez.
+    const k = bible.voice?.knobs;
+    if (k) {
+      const mid = (k.sentenceAvg[0] + k.sentenceAvg[1]) / 2;
+      const avg = avgSentenceWords(body);
+      if (mid > 0 && (avg > mid * 1.7 || avg < mid * 0.6)) {
+        const dir = avg > mid ? "MÁS CORTAS" : "MÁS LARGAS";
+        const retry = await tryOne(
+          `AJUSTE DE VOZ: tus frases deben ser ${dir}. Frase promedio objetivo: ${k.sentenceAvg[0]}-${k.sentenceAvg[1]} palabras. Respétalo sin sacrificar la historia. ${REPAIR}`
+        );
+        if (retry) body = retry;
+      }
+    }
+
+    // Paso ANTI-REPETICIÓN: muletillas del modelo (se repiten entre libros) +
+    // frases ya usadas en capítulos anteriores del MISMO libro. Reintenta una
+    // vez prohibiéndolas explícitamente; conserva el reintento solo si repite MENOS.
+    const reused = reusedNgrams(body, soFar, 5, 12);
+    const crutches = crutchHits(body);
+    const repCount = reused.length + crutches.length;
+    const keepReg = hardRegister(bible)
+      ? "MANTÉN el mismo nivel explícito y crudo del capítulo; no suavices el sexo ni la violencia al reescribir. "
+      : "";
+    if (repCount > 0) {
+      logIncident(`chapter: repetición (${crutches.length} muletillas, ${reused.length} frases reusadas), reintento`);
+      const banList = [...crutches, ...reused].slice(0, 18).map((s) => `«${s}»`).join("; ");
+      const fixed = await tryOne(
+        `NO REPITAS: estas frases son muletillas tuyas o ya aparecieron en capítulos anteriores del libro. NO las uses ni las parafrasees; expresa lo mismo con otras palabras: ${banList}. ${keepReg}` + REPAIR
+      );
+      if (fixed && reusedNgrams(fixed, soFar, 5, 12).length + crutchHits(fixed).length < repCount) body = fixed;
+    }
+
+    // Paso ANTI-ANTÍTESIS: si el capítulo abusa de "no era X, sino/era Y" (≥2),
+    // reintenta pidiendo afirmaciones directas. Conserva solo si baja el conteo.
+    const anti = antithesisHits(body);
+    if (anti >= 2) {
+      logIncident(`chapter: exceso de antítesis "no era...sino/era" (${anti}), reintento`);
+      const fixed = await tryOne(
+        `REESCRIBE eliminando la muletilla de antítesis negativa: no uses "no era X, sino Y" ni "no era X, era Y" más de UNA vez en todo el capítulo. Afirma las cosas de forma directa (di lo que SÍ es, sin el rodeo del "no era…"). Mantén la historia y los hechos idénticos. ${keepReg}` + REPAIR
+      );
+      if (fixed && antithesisHits(fixed) < anti) body = fixed;
+    }
+
+    // Revalidación FINAL de registro: los reintentos de arriba (repetición y
+    // antítesis) regeneran el capítulo y pueden haberlo SUAVIZADO. Si el ADN es
+    // duro/explícito y quedó blando, endurece una última vez (prioridad: que no
+    // se pierda el registro explícito aunque reaparezca alguna repetición).
+    if (hardRegister(bible) && looksTooSoft(body)) {
+      logIncident("chapter: re-suavizado tras reintentos, re-endurecimiento final de registro");
+      const harder = await tryOne(
+        "AJUSTE DE REGISTRO (final): este libro es oscuro/explícito. Devuelve el registro crudo, visceral y anatómico en la intimidad y la violencia, con lenguaje directo y sin romance azucarado ni eufemismos. " + REPAIR
+      );
+      if (harder && !looksTooSoft(harder)) body = harder;
+    }
+
+    // Piso DURO: si tras todos los reintentos el capítulo sigue siendo un
+    // resumen crítico (< 300 palabras), lo rechazamos devolviendo null para que
+    // el bucle exterior regenere el capítulo entero desde cero (no publicamos un
+    // stub anémico como el de ~90 palabras).
+    if (countWords(body) < 300) {
+      logIncident(`chapter: sigue anémico (${countWords(body)} palabras) tras reintentos; se regenera entero`);
+      return "";
+    }
+
+    return body;
+  };
+
+  // Reintenta el capítulo completo con ESPERA si la cadena se agota (timeout /
+  // ratelimit de un modelo grande). Devuelve null solo tras agotar los reintentos;
+  // el llamador decide qué hacer (reintentar más tarde), sin publicar un stub.
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  for (let round = 0; round < 3; round++) {
+    try {
+      const body = await oneRound();
+      if (body) return { t: chapterTitle(index, beat), b: latinize(body) };
+      logIncident("chapter: salida insegura/rechazo/vacía");
+    } catch {
+      logIncident("chapter: modelo falló, reintento con espera");
+    }
+    if (round < 2) await sleep(2500 * (round + 1)); // 2.5s, luego 5s
   }
-  return deterministicChapter(bible, index);
+  logIncident("chapter: agotado tras reintentos");
+  return null;
 }
 
 /** Si el texto se cortó a media frase (sin puntuación de cierre), lo recorta
@@ -416,8 +880,17 @@ function stripMetaNarration(text: string): string {
   return out.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function normalizeDashes(s: string): string {
+  return (s || "")
+    // caracteres de "caja"/geométricos/bloque (U+2500–U+25FF) y barras/guiones
+    // raros que algunos modelos sueltan como guion de diálogo → em dash estándar
+    .replace(/[\u2500-\u25FF\u2015\u2E3A\u2E3B\uFE58\uFF0D\u2012\u2013]/g, "—")
+    .replace(/—{2,}/g, "—")                                   // colapsa em dashes repetidos
+    .replace(/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ""); // quita reemplazo/controles
+}
+
 function cleanChapterText(raw: string): string {
-  const lines = (raw || "").replace(/\r/g, "").split("\n");
+  const lines = normalizeDashes(raw || "").replace(/\r/g, "").split("\n");
   while (lines.length && !lines[0].trim()) lines.shift();
   if (lines.length) {
     const firstRaw = lines[0].trim();
@@ -484,9 +957,16 @@ function deterministicChapter(bible: StoryBible, n: number): Chapter {
   const a = bible.characters[0]?.name ?? "Ella";
   const b = bible.characters[1]?.name ?? "Él";
   const body =
-    `${a} sabía que esa noche marcaría un antes y un después. ` +
-    `El aire entre ${a} y ${b} estaba cargado de todo lo que ninguno se atrevía a decir. ` +
-    `(${beat}.) Tono ${bible.tone}. ` +
-    `\n\n[Borrador determinista — el modelo escribirá esta escena completa cuando se enchufe la ruta asíncrona.]`;
+    `La tensión entre ${a} y ${b} se espesó en el aire, densa como humo. ` +
+    `${a} sabía que esa noche marcaría un antes y un después: lo sentía en el pulso acelerado, en la forma en que ${b} la miraba sin decir nada. ` +
+    `Ninguno se atrevía a nombrar lo que ardía entre ellos, pero estaba ahí, inevitable. ` +
+    `${b} dio un paso hacia ella, y el silencio se volvió una promesa y una amenaza a la vez. ` +
+    `Lo que empezó como un pulso de miradas terminó marcándolos a los dos, sin retorno posible.`;
   return { t: chapterTitle(n, beat), b: body };
+}
+
+/** Capítulo de respaldo (coherente, sin nota de desarrollador) para el último
+    recurso cuando la generación con modelo se agota tras reintentos. */
+export function fallbackChapter(bible: StoryBible, n: number): Chapter {
+  return deterministicChapter(bible, n);
 }

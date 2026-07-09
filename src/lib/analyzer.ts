@@ -11,7 +11,7 @@
 --------------------------------------------------------------------------- */
 import type { Profile, HeatLevel, SceneSpec } from "./types";
 import { assessOutput, logIncident } from "./safety";
-import { getProvider } from "./provider";
+import { getAnalysisProvider } from "./provider";
 
 export type ProfileDraft = Partial<Profile> & { blocked: boolean };
 
@@ -146,7 +146,7 @@ const PROFILE_SYSTEM = [
     Valida todo contra las listas (descarta lo que no esté). Sin texto guardado. */
 async function analyzeWithModel(text: string): Promise<Partial<Profile> | null> {
   try {
-    const { text: out } = await getProvider().complete({
+    const { text: out } = await getAnalysisProvider().complete({
       system: PROFILE_SYSTEM,
       messages: [{ role: "user", content: text.slice(0, 14000) }],
       maxTokens: 400,
@@ -171,6 +171,77 @@ async function analyzeWithModel(text: string): Promise<Partial<Profile> | null> 
     return draft;
   } catch {
     return null;
+  }
+}
+
+/* Etiquetas de PRECISIÓN para el match (no relleno generoso): solo lo dominante
+   y coherente, mapeado a los mismos catálogos que los perfiles. */
+const MATCH_TAGS_SYSTEM = [
+  "Eres un clasificador de estilo literario. Etiqueta la obra SOLO con lo DOMINANTE y claramente central, para emparejarla con gustos de lectura.",
+  "REGLAS: no rellenes de más; incluye SOLO lo evidente en el texto; NO mezcles etiquetas contradictorias (p. ej. 'enemigos a amantes' junto a 'amigos a amantes'); usa 'segundas oportunidades' SOLO si dos ex amantes se reencuentran (no por defecto); si la obra es cruda, violenta u oscura, NO uses tonos suaves ('tierno').",
+  "CALIBRA la intensidad y la oscuridad por lo más FUERTE del texto: si hay sexo gráfico/anatómico o violencia sexual, INTENSIDAD = 'explícito'; si hay tortura, asesinato, cautiverio o sadismo, OSCURIDAD = 'very-dark' o 'extreme-dark'. Devuelve SIEMPRE oscuridad e intensidad.",
+  `GÉNERO (uno): ${A_GENRES.join(" | ")}`,
+  `DINÁMICAS (elige 3-5, las MÁS dominantes y coherentes entre sí): ${A_TROPES.join(" | ")}`,
+  `INTENSIDAD (una): ${A_HEAT.join(" | ")}`,
+  `TONO (1-3 dominantes): ${A_TONE.join(" | ")}`,
+  `OSCURIDAD (una): ${A_DARKNESS.join(" | ")}`,
+  'Responde SOLO con JSON, sin Markdown: {"genre":"","tropes":[],"heat":"","tone":[],"darkness":""}',
+].join("\n");
+
+export interface MatchTags {
+  genre?: string;
+  tropes: string[];
+  heat_level: HeatLevel | null;
+  tone: string[];
+  darkness: string;
+}
+
+export async function extractMatchTags(text: string): Promise<MatchTags> {
+  const empty: MatchTags = { tropes: [], heat_level: null, tone: [], darkness: "" };
+
+  // 1) intento de PRECISIÓN con el modelo
+  let model: MatchTags | null = null;
+  try {
+    if (assessOutput(text).ok) {
+      const { text: out } = await getAnalysisProvider().complete({
+        system: MATCH_TAGS_SYSTEM,
+        messages: [{ role: "user", content: text.slice(0, 14000) }],
+        maxTokens: 300,
+        temperature: 0.1,
+      });
+      const raw = safeJson(out);
+      if (raw) {
+        const genre =
+          pickVocab(raw.genre, A_GENRES) ||
+          (typeof raw.genre === "string" && raw.genre.trim().length > 1 && raw.genre.trim().length <= 40
+            ? raw.genre.trim().toLowerCase() : undefined);
+        model = {
+          genre,
+          tropes: pickVocabMany(raw.tropes, A_TROPES, 5),
+          heat_level: (pickVocab(raw.heat, A_HEAT) as HeatLevel) || null,
+          tone: pickVocabMany(raw.tone, A_TONE, 3),
+          darkness: pickVocab(raw.darkness, A_DARKNESS) || "",
+        };
+      }
+    }
+  } catch { /* cae al respaldo */ }
+
+  const hasModel = !!model && !!(model.genre || model.tropes.length || model.tone.length || model.heat_level || model.darkness);
+  if (hasModel) return model as MatchTags;
+
+  // 2) RESPALDO: heurística (siempre da algo), recortada a límites de match
+  try {
+    const base = analyzeText(text);
+    if (base.blocked) return empty;
+    return {
+      genre: base.genre || undefined,
+      tropes: (base.tropes || []).slice(0, 5),
+      heat_level: base.heat_level ?? null,
+      tone: (base.tone || []).slice(0, 3),
+      darkness: base.darkness || "",
+    };
+  } catch {
+    return empty;
   }
 }
 

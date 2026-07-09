@@ -18,6 +18,7 @@ export interface AutoPick {
 
 export interface Profile {
   id: string;
+  ownerId?: string; // usuario dueño (multiusuario); ausente = dato legado
   name: string;
   source: string; // extraído | manual | mezcla
   genre?: string;
@@ -83,11 +84,42 @@ export interface StoryBible {
   interestContradiction?: string; // la grieta entre lo que el interés dice y hace
   // escenas pedidas por la lectora, repartidas por capítulo (código decide DÓNDE)
   scenePlan?: { chapter: number; directive: string }[];
+  voice?: BibleVoice;     // voz/ADN de estilo asignado a ESTE libro (fase 2)
   arc: { chapter: number; beat: string }[];
+}
+
+/* Perillas DURAS de estilo: parámetros accionables y verificables. */
+export interface VoiceKnobs {
+  sentenceAvg: [number, number]; // rango de palabras por frase
+  paragraphLines: "cortos" | "medios" | "largos";
+  dialogueRatio: "bajo" | "medio" | "alto";
+  explicitness: number;          // 1-5
+  interiority: "baja" | "media" | "alta";
+  tense: "presente" | "pasado";
+  punctuation: string[];         // tics de puntuación característicos
+}
+
+/* Payload compacto de voz que se congela en la biblia de cada libro. */
+export interface BibleVoice {
+  name: string;
+  imperatives: string[];                 // 3-5 reglas cortas, re-inyectadas por capítulo
+  knobs?: VoiceKnobs;
+  styleSample?: string;                  // escena original en esa voz (few-shot)
+  lexicon?: { sex: string[]; violence: string[]; action: string[] };
+  plotBeats?: PlotBeat[];                // mapa de trama (patrón) para replicar la estructura
+}
+
+/* Hito estructural de trama, posicionado por % del libro (PATRÓN abstracto,
+   nunca la trama concreta de la obra). */
+export interface PlotBeat {
+  at: number;      // posición 0-100 (% del libro)
+  type: string;    // pico de tensión, plot twist, confrontación, punto de quiebre, revés, falsa victoria, clímax…
+  note: string;    // descripción abstracta del patrón (sin nombres ni eventos específicos)
 }
 
 export interface Story {
   id: string;
+  ownerId?: string; // usuario dueño (multiusuario); ausente = dato legado
   profileSnapshot: Profile; // FOTO CONGELADA — no cambia aunque el perfil se edite/borre
   profileName: string;
   predecessorId: string | null;
@@ -99,6 +131,10 @@ export interface Story {
   chaptersTotal?: number; // total esperado del formato (para mostrar progreso)
   generating?: boolean;   // true mientras el worker produce los capítulos restantes
   coverImage?: string | null; // ruta de la portada IA (/covers/<id>.png); null/undefined => usa vector
+  bookTitle?: string;         // título real generado (corto, dark) una vez comprado; si no, se usa el descriptor
+  coverImageOrig?: string | null; // portada original antes de regenerar (para poder volver a ella)
+  coverImageAlt?: string | null;  // portada regenerada (la alternativa)
+  coverRegenerated?: boolean;     // el usuario ya gastó su única regeneración de este libro
   coverFamily?: number; // índice de la familia de motivo usada (para no repetir objeto en portadas vecinas)
   coverStyle?: number;  // índice del estilo de portada usado (para no repetir estilo en portadas vecinas)
   origin: Origin;
@@ -114,11 +150,82 @@ export interface Account {
   created: number;
 }
 
+/* -------------------------------- Usuarios -------------------------------- */
+export type Role = "user" | "admin";
+
+export interface User {
+  id: string;
+  email: string;             // normalizado a minúsculas
+  name: string;
+  passwordHash?: string;     // solo cuentas email+contraseña
+  googleId?: string;         // solo cuentas de Google (sub del ID token)
+  dateOfBirth: string;       // ISO YYYY-MM-DD (declarada en el registro)
+  role: Role;                // "admin" = superusuario (control total)
+  envAdmin?: boolean;        // true si es admin POR SUPERUSER_EMAIL (no manual)
+  suspended?: boolean;       // el admin puede suspender una cuenta
+  avatar?: string;           // id de máscara elegido (cosmético, por usuario)
+  avatarBg?: string;         // color de fondo del avatar (cosmético, por usuario)
+  createdAt: number;
+  lastLogin?: number;
+}
+
+/* Lo que se expone del usuario al cliente (nunca el hash ni datos sensibles). */
+export interface PublicUser {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  adult: boolean;
+  avatar?: string;
+  avatarBg?: string;
+  createdAt: number;
+}
+
 export interface DB {
-  account: Account;
+  account: Account;          // legado (single-tenant); se conserva por compatibilidad
+  users: User[];
   profiles: Profile[];
   stories: Story[];
+  voices?: VoiceProfile[];   // ADN de estilo extraído de obras (voces reutilizables)
   craftStats?: CraftStats; // señal de craft AGREGADA y anónima (sin texto ni obras)
+}
+
+/* ADN de estilo: descriptores ABSTRACTOS de cómo se escribe una obra (nunca
+   texto literal). Se usan para variar la "sensación de autor" entre libros. */
+export interface VoiceProfile {
+  id: string;
+  name: string;
+  source?: string;          // nombre del archivo (solo metadato)
+  createdAt: number;
+  createdBy: string;        // id del admin que lo creó
+  structure: string;        // arquitectura del libro (capítulos, cadencia, ritmo)
+  voice: string;            // esencia de la voz narrativa
+  sceneCraft: {             // nota de montaje concreta por tipo de escena
+    sex: string;
+    violence: string;
+    action: string;
+  };
+  lexicon?: {               // DICCIONARIO: léxico característico por tipo de escena
+    sex: string[];
+    violence: string[];
+    action: string[];
+  };
+  knobs?: VoiceKnobs;       // perillas duras (fase 2)
+  imperatives?: string[];   // reglas cortas re-inyectables (fase 2)
+  styleSample?: string;     // escena original en esa voz, para few-shot (fase 2)
+  tags?: VoiceTags;         // etiquetas para el match con la categoría del usuario
+  plotBeats?: PlotBeat[];   // mapa de trama: hitos estructurales por % del libro
+  tensionCurve?: number[];  // curva de tensión (8-12 puntos, 0-100)
+  stats?: { words?: number };
+}
+
+/* Etiquetas comparables (mismo vocabulario que los perfiles) para el match. */
+export interface VoiceTags {
+  genre?: string;
+  tropes: string[];
+  heat?: string;
+  tone: string[];
+  darkness?: string;
 }
 
 /* Estadística AGREGADA de estructura narrativa aprendida de PDFs subidos.
@@ -172,6 +279,10 @@ export interface PublicStory {
   chaptersTotal: number; // total que tendrá el libro
   generating: boolean;   // true mientras se generan los que faltan
   coverImage?: string | null; // portada IA si está lista
+  bookTitle?: string | null;  // título real (corto, dark) si el libro ya está comprado/generado
+  coverImageOrig?: string | null; // portada original (si hubo regeneración)
+  coverImageAlt?: string | null;  // portada alternativa regenerada
+  coverRegenerated?: boolean;     // ya se usó la única regeneración
   coverPending: boolean; // true mientras la IA la genera
   price: number;
   expiresInDays: number | null;

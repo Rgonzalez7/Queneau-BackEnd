@@ -57,127 +57,172 @@ function mulberry32(a: number) {
 }
 const pick = <T,>(arr: T[], rnd: () => number): T => arr[Math.floor(rnd() * arr.length)];
 
-/* Repertorio ENORME de emblemas dark romance, agrupado por FAMILIAS.
-   Genérico (no atado a la historia) y sin personas. La selección elige primero
-   una familia al azar y luego un motivo dentro: así ningún objeto (ni la
-   calavera) domina y las portadas se sienten variadas. */
-const MOTIF_FAMILIES: string[][] = [
+/* Repertorio de emblemas dark romance por FAMILIAS. Cada familia es "object"
+   (objeto, sin personas) o "figure" (parte del cuerpo SIN rostro: piernas,
+   espalda, torso, manos, o un primer plano íntimo de ojos/labios). La selección
+   elige una familia al azar y luego un motivo, evitando repetir la familia
+   vecina, para máxima variedad. Las rosas ya no están en casi todo. */
+const MOTIF_FAMILIES: { kind: "object" | "figure"; motifs: string[] }[] = [
   // armas de fuego
-  [
-    "an ornate antique revolver resting on red roses",
-    "a pair of crossed pistols over black roses",
-    "a vintage pistol and a single red rose on dark velvet",
-    "a golden revolver wreathed in thorny vines",
-  ],
+  { kind: "object", motifs: [
+    "an ornate antique revolver on black velvet",
+    "a pair of crossed pistols on wet dark marble",
+    "a vintage pistol beside scattered bullet casings",
+    "a golden revolver half-lit in deep shadow",
+    "a smoking pistol on a bloodstained table",
+  ] },
   // armas blancas
-  [
-    "an antique dagger entwined with thorny red roses",
-    "twin crossed daggers over a blooming red rose",
-    "a switchblade and scattered rose petals on black marble",
-    "an ornate sword wrapped in thorny vines",
-    "a straight razor resting on crimson silk and petals",
-  ],
+  { kind: "object", motifs: [
+    "an antique dagger on black silk",
+    "twin crossed daggers on cold stone",
+    "an ornate switchblade on dark marble",
+    "an ornate sword laid across velvet",
+    "a straight razor resting on crimson silk",
+    "a curved dagger dripping a single drop of blood",
+  ] },
   // serpientes
-  [
-    "a black serpent coiled around a single red rose",
+  { kind: "object", motifs: [
+    "a black serpent coiled over wet marble",
     "two serpents entwined around an ornate dagger",
     "a venomous snake wrapped around an hourglass",
-    "a coiled cobra rising over black roses",
-  ],
+    "a coiled cobra rising from darkness",
+    "an emerald snake slithering across dark silk",
+  ] },
   // arañas y telarañas
-  [
-    "a black widow spider on a dewy spiderweb with a red rose",
-    "an ornate spiderweb glistening over black roses",
+  { kind: "object", motifs: [
+    "a black widow spider on a dewy spiderweb",
+    "an ornate spiderweb glistening in cold light",
     "a black spider crawling across crimson silk",
-    "a delicate web spun between thorny rose stems",
-  ],
+    "a dewy web spun between rusted iron bars",
+  ] },
   // calaveras humanas
-  [
-    "an ornate human skull wrapped in red roses and thorns",
-    "a gilded human skull crowned with black roses",
-    "a human skull and a dagger crossed over deep red roses",
-    "a single red rose growing through the jaw of a skull",
-  ],
+  { kind: "object", motifs: [
+    "an ornate human skull wrapped in thorny vines",
+    "a gilded human skull wearing a small crown",
+    "a human skull and a dagger crossed on stone",
+    "a human skull wreathed in swirling smoke",
+    "a jewel-encrusted skull on black velvet",
+  ] },
   // calaveras de animales
-  [
-    "a ram skull with long curved horns among black roses",
+  { kind: "object", motifs: [
+    "a ram skull with long curved horns",
     "a bull skull entwined with thorny vines",
-    "a small bird skull beside a single red rose",
-    "a stag skull with antlers wrapped in red roses",
-  ],
+    "a stag skull with wide antlers in shadow",
+    "a raven skull beside a tarnished coin",
+  ] },
   // máscaras y antifaces
-  [
-    "a venetian masquerade mask among black roses",
-    "an ornate plague-doctor mask on dark velvet",
-    "a black domino mask and red rose petals",
-    "a gilded carnival mask wreathed in thorns",
-  ],
-  // prendas y telas (como objetos, no usadas por nadie)
-  [
-    "a black lace corset laid on dark silk",
-    "fishnet stockings draped over an antique chair with rose petals",
-    "a single stiletto heel beside scattered red roses",
-    "tall black leather boots and a riding crop on velvet",
-    "a silk necktie coiled around a red rose",
-    "long black satin gloves and a red rose on velvet",
-    "a black velvet choker with a ruby pendant on silk",
-    "folds of dark red drapery around a single rose",
-  ],
-  // ataduras
-  [
-    "a pair of antique handcuffs over red roses",
-    "heavy iron chains wrapped around a red rose",
-    "a padlock and key on a chain over black roses",
-    "a leather collar and chain on dark velvet",
-    "rope coiled around thorny rose stems",
-  ],
-  // realeza y poder
-  [
+  { kind: "object", motifs: [
+    "a venetian masquerade mask on dark velvet",
+    "an ornate plague-doctor mask in shadow",
+    "a black domino mask on crimson silk",
+    "a gilded carnival mask wreathed in smoke",
+  ] },
+  // coronas y realeza
+  { kind: "object", motifs: [
     "an ornate golden crown over crossed daggers",
-    "a black king and queen chess piece beside a red rose",
-    "a fallen crown among scattered rose petals",
-    "a signet ring resting on spilled red wine and petals",
-    "a toppled king chess piece over black roses",
-  ],
+    "a fallen tarnished crown on cold stone",
+    "a crown of thorns wrapped in gold wire",
+    "a signet ring resting in spilled red wine",
+    "a jeweled crown half-sunk in dark water",
+  ] },
+  // ajedrez (poder y estrategia)
+  { kind: "object", motifs: [
+    "a toppled black king chess piece on a marble board",
+    "a black king and a white queen facing off",
+    "an ornate black queen chess piece in a shaft of light",
+    "a checkmate on a shattered chessboard",
+    "a single king piece casting a long shadow",
+  ] },
+  // esqueletos (manos)
+  { kind: "object", motifs: [
+    "a skeletal hand gripping an ornate dagger",
+    "a skeletal hand wearing a jeweled ring",
+    "two crossed skeletal hands on black silk",
+    "a skeletal hand reaching up through smoke",
+  ] },
+  // ataduras
+  { kind: "object", motifs: [
+    "a pair of antique handcuffs on dark velvet",
+    "heavy iron chains coiled on stone",
+    "a padlock and key on a chain",
+    "a leather collar and chain on black silk",
+    "rope coiled in an intricate knot",
+  ] },
+  // prendas y objetos de seducción
+  { kind: "object", motifs: [
+    "a black lace corset laid on dark silk",
+    "a single red stiletto heel on marble",
+    "tall black leather boots and a riding crop",
+    "long black satin gloves on velvet",
+    "a black velvet choker with a ruby pendant",
+    "fishnet stockings draped over an antique chair",
+  ] },
   // alas y aves
-  [
-    "a pair of black feathered wings around a red rose",
-    "a single black raven perched among thorny roses",
+  { kind: "object", motifs: [
+    "a pair of black feathered wings spread wide",
+    "a single black raven perched on iron",
     "scattered black feathers over crimson silk",
-    "a crow with spread black wings over roses",
-    "a moth with intricate wings over a single red rose",
-  ],
+    "a crow with spread black wings in fog",
+    "a moth with intricate patterned wings",
+  ] },
   // humo y atmósfera
-  [
-    "swirling dark smoke around a single red rose",
-    "wisps of smoke rising from a snuffed candle and roses",
-    "incense smoke curling around black roses",
-  ],
+  { kind: "object", motifs: [
+    "swirling dark smoke in a shaft of light",
+    "wisps of smoke rising from a snuffed candle",
+    "incense smoke curling in the dark",
+  ] },
   // sangre y vasijas
-  [
-    "crimson blood splatter across black roses",
-    "a gothic chalice spilling blood over rose petals",
-    "drops of blood falling onto a white rose",
-    "a tipped wine glass spilling red across petals",
-  ],
+  { kind: "object", motifs: [
+    "crimson blood splatter across dark marble",
+    "a gothic chalice spilling dark blood",
+    "drops of blood falling onto white silk",
+    "a tipped wine glass spilling red across stone",
+  ] },
   // objetos góticos
-  [
-    "an antique hourglass wrapped in thorns and roses",
-    "an ornate pocket watch and a red rose on velvet",
-    "a candelabra with dripping wax among red roses",
-    "a shattered mirror reflecting a single red rose",
-    "a deck of black playing cards fanned over roses",
-    "an ornate iron key on dark velvet with rose petals",
-    "a cracked porcelain teacup spilling rose petals",
-  ],
-  // botánico
-  [
+  { kind: "object", motifs: [
+    "an antique hourglass wrapped in thorns",
+    "an ornate pocket watch on dark velvet",
+    "a candelabra with dripping wax in the dark",
+    "a shattered mirror in a gilded frame",
+    "a deck of black playing cards fanned out",
+    "an ornate iron key on dark velvet",
+    "a cracked porcelain teacup on a saucer",
+  ] },
+  // botánico (rosas — ya solo una familia)
+  { kind: "object", motifs: [
     "a single dark red rose with sharp thorns",
     "a bouquet of black roses bound in ribbon",
-    "thorny vines wrapped around a blooming red rose",
-    "deadly nightshade and red roses on dark velvet",
-    "black poppies and thorns on crimson silk",
-  ],
+    "thorny vines wrapped around a blooming rose",
+    "deadly nightshade on dark velvet",
+    "black poppies on crimson silk",
+  ] },
+
+  // ---- FIGURA: cuerpo SIN rostro ----
+  // piernas
+  { kind: "figure", motifs: [
+    "a woman's crossed legs in fishnet stockings and red stiletto heels, cropped at the thighs, face out of frame",
+    "bare legs draped over a dark velvet chaise, cropped at the waist, faceless",
+    "legs in torn black stockings against dark silk, face not shown",
+  ] },
+  // espalda de mujer
+  { kind: "figure", motifs: [
+    "a woman seen from behind, her bare back and shoulder blades, head turned away and cropped",
+    "the elegant curve of a woman's spine and shoulders in low light, faceless",
+    "a woman's back laced into a black corset, head cropped out of frame",
+  ] },
+  // hombre sin rostro
+  { kind: "figure", motifs: [
+    "a shirtless muscular man cropped above the jaw, tattoos across his chest, face not shown",
+    "a man's tattooed hands and forearms resting on his knees, face out of frame",
+    "a man in an open black dress shirt, cropped below the chin, faceless",
+  ] },
+  // primer plano íntimo (ojos, labios, manos)
+  { kind: "figure", motifs: [
+    "an extreme close-up of a single intense eye framed by dark lashes",
+    "extreme close-up of parted red lips and jaw, the rest of the face out of frame",
+    "two hands clasped tightly, one gripping the other, dramatic light",
+    "a hand with red-painted nails resting on a bare collarbone, cropped",
+  ] },
 ];
 
 const PALETTES = [
@@ -202,26 +247,31 @@ const LIGHTING = [
    biblioteca no se sienta toda igual aunque cambie el objeto. Todos respetan
    "sin texto ni personas" (el título lo dibuja la tarjeta encima). */
 type StyleFn = (subject: string, palette: string, lighting: string) => string;
+// ACTIVOS (por ahora): solo el estilo fotográfico de la primera portada
+// (macro-textura) y el atmosférico de la última (humo/brasas). Sin oro, sin
+// filigrana, sin Art Déco. Para reactivar más variedad, mueve estilos desde
+// COVER_STYLES_PARKED aquí abajo.
 const COVER_STYLES: { name: string; build: StyleFn }[] = [
+  {
+    name: "macro-textura",
+    build: (s, p, l) =>
+      `Extreme close-up macro of ${s}. ${p}. ${l}. Full-bleed luxurious textured surface (black silk, velvet, wet marble, satin), shallow depth of field, fine dewdrops and tactile detail, abstract and sensual atmosphere, photographic`,
+  },
+  {
+    name: "atmosferico-humo",
+    build: (s, p, l) =>
+      `${s} emerging from swirling smoke, embers and haze. ${p}. ${l}. Near-abstract atmospheric mood, drifting particles and godrays, soft-focus dark background, mysterious and cinematic, photographic`,
+  },
+];
+
+// APARCADOS (desactivados por ahora). Para volver a usar alguno, córtalo y
+// pégalo dentro de COVER_STYLES de arriba. Los tres primeros son los de oro /
+// Art Déco que no gustaron.
+const COVER_STYLES_PARKED: { name: string; build: StyleFn }[] = [
   {
     name: "emblema-ornamentado",
     build: (s, p, l) =>
       `A central emblem of ${s}. ${p}. ${l}. Symmetrical centered heraldic composition, baroque ornate filigree, gold-foil accents, intricate hyper-detailed rendering, embossed look, glossy and luxurious`,
-  },
-  {
-    name: "minimalista",
-    build: (s, p, l) =>
-      `A single small ${s}, isolated. ${p}. ${l}. Minimalist composition with vast empty negative space and dark breathing room, refined and modern, subtle film grain, understated and elegant`,
-  },
-  {
-    name: "macro-textura",
-    build: (s, p, l) =>
-      `Extreme close-up macro of ${s}. ${p}. ${l}. Full-bleed luxurious textured surface (black silk, velvet, wet marble, satin), shallow depth of field, fine dewdrops and tactile detail, abstract and sensual atmosphere`,
-  },
-  {
-    name: "oleo",
-    build: (s, p, l) =>
-      `${s}, rendered as a moody fine-art oil painting. ${p}. ${l}. Visible brushstrokes, old-master chiaroscuro, painterly baroque still life, dramatic gallery-quality artwork`,
   },
   {
     name: "grabado-dorado",
@@ -229,21 +279,27 @@ const COVER_STYLES: { name: string; build: StyleFn }[] = [
       `${s}, as an intricate gold line engraving and etching on a flat near-black background. ${p}. Fine elegant linework, vintage botanical-illustration and tattoo style, graphic and symmetrical, flat 2D, no photographic depth`,
   },
   {
-    name: "floral-gotico",
-    build: (s, p, l) =>
-      `${s} surrounded by dense moody gothic florals and dark overgrown foliage. ${p}. ${l}. Lush decadent botanical arrangement filling the frame, baroque dark-cottagecore, rich and ornate`,
-  },
-  {
     name: "art-deco",
     build: (s, p) =>
       `${s} framed by an ornate art-deco geometric border. ${p}. Symmetrical deco linework, gold lines on black, 1920s luxury poster style, elegant geometry, crisp and graphic`,
   },
   {
-    name: "atmosferico-humo",
+    name: "minimalista",
     build: (s, p, l) =>
-      `${s} emerging from swirling smoke, embers and haze. ${p}. ${l}. Near-abstract atmospheric mood, drifting particles and godrays, soft-focus dark background, mysterious and cinematic`,
+      `A single small ${s}, isolated. ${p}. ${l}. Minimalist composition with vast empty negative space and dark breathing room, refined and modern, subtle film grain, understated and elegant`,
+  },
+  {
+    name: "oleo",
+    build: (s, p, l) =>
+      `${s}, rendered as a moody fine-art oil painting. ${p}. ${l}. Visible brushstrokes, old-master chiaroscuro, painterly baroque still life, dramatic gallery-quality artwork`,
+  },
+  {
+    name: "floral-gotico",
+    build: (s, p, l) =>
+      `${s} surrounded by dense moody gothic florals and dark overgrown foliage. ${p}. ${l}. Lush decadent botanical arrangement filling the frame, baroque dark-cottagecore, rich and ornate`,
   },
 ];
+void COVER_STYLES_PARKED; // referenciado para no romper lint por "no usado"
 
 export function buildCoverPrompt(
   bible: StoryBible,
@@ -263,23 +319,34 @@ export function buildCoverPrompt(
     si = Math.floor(rnd() * COVER_STYLES.length);
   }
 
-  const subject = pick(MOTIF_FAMILIES[fi], rnd); // motivo dentro de la familia
+  const fam = MOTIF_FAMILIES[fi];
+  const subject = pick(fam.motifs, rnd); // motivo dentro de la familia
+  const isFigure = fam.kind === "figure";
   const palette = pick(PALETTES, rnd);
   const lighting = pick(LIGHTING, rnd);
   const darker = (bible.darkness || "").toLowerCase().includes("extreme") ? " Very dark and low-key." : "";
 
   const styleCore = COVER_STYLES[si].build(subject, palette, lighting);
+  // Regla de personas: los objetos no llevan personas; las "figuras" permiten
+  // cuerpo pero NUNCA un rostro reconocible (recortado, de espaldas o parcial).
+  const peopleRule = isFigure
+    ? "Do NOT show a full or recognizable face — crop it out, turn it away, or keep it a partial close-up; faceless. Tasteful, no explicit nudity."
+    : "No people, no faces, no human figures.";
   const prompt =
     `Professional dark romance book cover. ${styleCore}. ` +
     `Premium, striking and decadent dark-romance aesthetic.${darker} ` +
     `Strong vignette with darkened top and bottom edges. ` +
-    `No text, no typography, no letters, no title, no watermark, no people, no faces, no human figures.`;
-  const negative =
-    "people, person, human, humans, man, woman, child, baby, infant, toddler, doll, figure, " +
-    "silhouette, mannequin, statue, bust, portrait, face, faces, eyes, hands, arms, legs, body, skin, " +
-    "nudity, explicit, " +
-    "text, words, letters, title, typography, watermark, signature, logo, ui, frame border, " +
-    "deformed, low quality, blurry, jpeg artifacts, cartoon, childish, oversaturated, flat colors";
+    `No text, no typography, no letters, no title, no watermark. ${peopleRule}`;
+  const negative = isFigure
+    ? "full face, whole face, recognizable face, portrait, headshot, front-facing face, smiling, looking at camera, two people, crowd, " +
+      "explicit nudity, genitalia, nipples, pornographic, " +
+      "text, words, letters, title, typography, watermark, signature, logo, ui, frame border, " +
+      "deformed, extra limbs, extra fingers, mutated hands, low quality, blurry, jpeg artifacts, cartoon, childish, oversaturated, flat colors"
+    : "people, person, human, humans, man, woman, child, baby, infant, toddler, doll, figure, " +
+      "silhouette, mannequin, statue, bust, portrait, face, faces, eyes, hands, arms, legs, body, skin, " +
+      "nudity, explicit, " +
+      "text, words, letters, title, typography, watermark, signature, logo, ui, frame border, " +
+      "deformed, low quality, blurry, jpeg artifacts, cartoon, childish, oversaturated, flat colors";
   const seed = hashStr(seedStr) % 2147483647;
   return { prompt, negative, seed, family: fi, style: si };
 }
@@ -390,4 +457,36 @@ export async function generateCover(storyId: string): Promise<void> {
   } finally {
     _covering.delete(storyId);
   }
+}
+
+/* Regenera la portada en un archivo APARTE (<id>-alt.png) SIN tocar la original,
+   para que el usuario pueda elegir entre las dos. Devuelve la ruta pública o null.
+   Usa una semilla distinta y evita repetir el estilo/motivo de la portada actual. */
+export async function regenerateCover(storyId: string): Promise<string | null> {
+  if (!coverEnabled()) return null;
+  const job = await withDB((db) => {
+    const s = db.stories.find((x) => x.id === storyId);
+    if (!s || !s.bibleSnapshot) return null;
+    const avoid: number[] = [];
+    const avoidStyles: number[] = [];
+    if (typeof s.coverFamily === "number") avoid.push(s.coverFamily); // no repetir el motivo actual
+    if (typeof s.coverStyle === "number") avoidStyles.push(s.coverStyle); // ni el estilo actual
+    return { bible: s.bibleSnapshot, avoid, avoidStyles };
+  });
+  if (!job) return null;
+
+  let buf: Buffer | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const seedKey = `${storyId}#regen${attempt}${Date.now()}`; // semilla distinta => imagen distinta
+    const { prompt, negative, seed } = buildCoverPrompt(job.bible, seedKey, job.avoid, job.avoidStyles);
+    const r = await falGenerate(prompt, negative, seed);
+    buf = r.buf;
+    if (!r.blanked) break;
+    console.warn(`[cover] regen intento ${attempt + 1} salió en negro/censurado, reintento ${storyId}`);
+  }
+  if (!buf) return null;
+
+  await fs.mkdir(COVERS_DIR, { recursive: true });
+  await fs.writeFile(path.join(COVERS_DIR, `${storyId}-alt.png`), buf);
+  return `/covers/${storyId}-alt.png`;
 }

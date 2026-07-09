@@ -79,6 +79,41 @@ function hasUnderageNumber(text: string): boolean {
   return re.test(text);
 }
 
+/* Posiciones de TODAS las apariciones de una lista de términos (misma semántica
+   que hasAny: límite de palabra para stems cortos, inclusión para el resto). */
+function escRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function findHits(text: string, terms: string[]): number[] {
+  const out: number[] = [];
+  for (const t of terms) {
+    const stem = t.length <= 4;
+    const re = stem
+      ? new RegExp(`(?:^|[^a-z0-9])${escRe(t)}(?:[^a-z0-9]|$)`, "gi")
+      : new RegExp(escRe(t), "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      out.push(m.index);
+      if (re.lastIndex <= m.index) re.lastIndex = m.index + 1;
+    }
+  }
+  return out.sort((a, b) => a - b);
+}
+/* ¿Algún término de A cae dentro de `win` caracteres de algún término de B?
+   Co-ocurrencia en PROXIMIDAD (mismo contexto), no en todo el documento. */
+function coOccurNear(text: string, aTerms: string[], bTerms: string[], win: number): boolean {
+  const a = findHits(text, aTerms);
+  if (a.length === 0) return false;
+  const b = findHits(text, bTerms);
+  if (b.length === 0) return false;
+  for (const p of a) {
+    let lo = 0, hi = b.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (b[mid] < p - win) lo = mid + 1; else hi = mid; }
+    if (lo < b.length && b[lo] <= p + win) return true;
+  }
+  return false;
+}
+
 /* Núcleo: evalúa un texto libre. */
 function assessText(raw: string): SafetyResult {
   const text = normalize(raw);
@@ -88,12 +123,14 @@ function assessText(raw: string): SafetyResult {
     return { ok: false, reason: "Edad explícita por debajo de 18." };
   }
 
-  const minorHit = hasAny(text, MINOR_TERMS);
-  const sexualHit = hasAny(text, SEXUAL_TERMS);
-
-  // Co-ocurrencia: término de menor + contexto sexual -> bloqueo.
-  if (minorHit && sexualHit) {
-    logIncident("co-ocurrencia menor+sexual");
+  // Co-ocurrencia en PROXIMIDAD (~200 caracteres = mismo contexto), NO en todo
+  // el documento. En un libro completo un apodo, un recuerdo de infancia o un
+  // "adolescente"/"teen" sueltos a capítulos de distancia de una escena sexual
+  // NO son sexualización y disparaban un falso positivo que bloqueaba toda obra
+  // adulta. Un término de menor JUNTO a uno sexual sí se bloquea. La regla de
+  // edad <18 de arriba sigue siendo absoluta, independiente de la proximidad.
+  if (coOccurNear(text, MINOR_TERMS, SEXUAL_TERMS, 200)) {
+    logIncident("co-ocurrencia menor+sexual en proximidad");
     return { ok: false, reason: "Indicio de sexualización de menores." };
   }
 
