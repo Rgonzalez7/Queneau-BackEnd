@@ -432,17 +432,40 @@ app.get(
   })
 );
 
-// Renombrar una voz.
+// Editar una voz: renombrar (name) y/o etiquetas (género, calor, oscuridad,
+// tono, dinámicas). El editor manda el set COMPLETO de etiquetas, así que las
+// reemplaza tal cual (permitiendo vaciar género/calor/oscuridad).
 app.patch(
   "/api/admin/voices/:id",
   requireAdmin,
   handler(async (req, res) => {
-    const name = String(req.body?.name || "").trim();
-    if (!name) throw new HttpError(400, "El nombre no puede estar vacío");
+    const body = (req.body || {}) as {
+      name?: string;
+      tags?: { genre?: string; heat?: string; darkness?: string; tone?: string[]; tropes?: string[] };
+    };
+    if (body.name === undefined && body.tags === undefined) {
+      throw new HttpError(400, "Nada que actualizar");
+    }
     const voice = await withDB((db) => {
       const v = (db.voices || []).find((x) => x.id === req.params.id);
       if (!v) throw new HttpError(404, "Voz no encontrada");
-      v.name = name.slice(0, 80);
+
+      if (body.name !== undefined) {
+        const name = String(body.name).trim();
+        if (!name) throw new HttpError(400, "El nombre no puede estar vacío");
+        v.name = name.slice(0, 80);
+      }
+
+      if (body.tags !== undefined && body.tags && typeof body.tags === "object") {
+        const t = body.tags;
+        v.tags = {
+          genre: typeof t.genre === "string" && t.genre.trim() ? t.genre.trim().slice(0, 60) : undefined,
+          heat: typeof t.heat === "string" && t.heat ? t.heat.slice(0, 40) : undefined,
+          darkness: typeof t.darkness === "string" && t.darkness ? t.darkness.slice(0, 40) : undefined,
+          tone: Array.isArray(t.tone) ? t.tone.map((x) => String(x).slice(0, 40)).filter(Boolean).slice(0, 20) : [],
+          tropes: Array.isArray(t.tropes) ? t.tropes.map((x) => String(x).slice(0, 60)).filter(Boolean).slice(0, 30) : [],
+        };
+      }
       return v;
     });
     res.json({ voice });
