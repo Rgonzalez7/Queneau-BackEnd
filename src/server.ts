@@ -44,12 +44,21 @@ const PORT = Number(process.env.PORT) || 4000;
 
 // CORS: el frontend (otro origen) consume la API CON cookies de sesión, así que
 // hace falta credentials:true y un origin EXPLÍCITO (no "*"). CORS_ORIGIN admite
-// una lista separada por comas; si no se define, refleja el origen (solo dev).
+// una lista separada por comas. Además se permite cualquier subdominio *.vercel.app
+// (preview/production) para no tener que reconfigurar en cada deploy. Sin lista,
+// refleja el origen (solo dev).
 const CORS_ORIGINS = (process.env.CORS_ORIGIN || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
 app.use(
   cors({
-    origin: CORS_ORIGINS.length ? CORS_ORIGINS : true,
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);              // curl / same-origin
+      if (!CORS_ORIGINS.length) return cb(null, true); // sin lista => refleja (dev)
+      let host = "";
+      try { host = new URL(origin).hostname; } catch { /* origin inválido */ }
+      const ok = CORS_ORIGINS.includes(origin) || /(^|\.)vercel\.app$/i.test(host);
+      cb(null, ok);
+    },
     credentials: true,
   })
 );
